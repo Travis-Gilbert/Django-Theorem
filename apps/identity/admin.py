@@ -1,6 +1,8 @@
 from django.contrib import admin, messages
 from django.utils import timezone
 
+from apps.support.models import ImpersonationGrant
+
 from .models import Membership, User
 
 
@@ -11,16 +13,28 @@ class UserAdmin(admin.ModelAdmin):
     search_fields = ("email", "workos_user_id", "display_name")
     actions = ["impersonate"]
 
-    @admin.action(description="Impersonate (audit log only — stub token)")
+    @admin.action(description="Impersonate (mint short-lived scoped token, logged)")
     def impersonate(self, request, queryset):
-        """Support impersonation: issues a short-lived scoped token stub and audits."""
+        """D11: mint ImpersonationGrant (<=30m), show token once, keep audit log."""
         for user in queryset:
-            # Live token mint requires WorkOS; stub records the audit event only.
+            membership = user.memberships.select_related("tenant").first()
+            if membership is None:
+                messages.error(
+                    request,
+                    f"Cannot impersonate {user.workos_user_id}: no tenant membership",
+                )
+                continue
+            grant, plaintext = ImpersonationGrant.mint(
+                tenant=membership.tenant,
+                subject_user_id=user.workos_user_id,
+                created_by=request.user,
+            )
             messages.warning(
                 request,
-                f"[audit] impersonate requested for {user.workos_user_id} "
-                f"by {request.user} at {timezone.now().isoformat()} "
-                "(StubImpersonationToken — no live WorkOS credential)",
+                f"[audit] impersonate {user.workos_user_id} tenant={membership.tenant.slug} "
+                f"token_id={grant.token_id} expires_at={grant.expires_at.isoformat()} "
+                f"by={request.user} at={timezone.now().isoformat()} "
+                f"— plaintext (shown once): {plaintext}",
             )
 
 

@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 
 from celery import shared_task
 from django.utils import timezone as dj_timezone
@@ -20,10 +21,19 @@ from django.utils import timezone as dj_timezone
 logger = logging.getLogger(__name__)
 
 TASK_VERSION = "0.1.0-stub"
+RENV_LOCKFILE_STUB = "renv.lock:stub"
 
 
 def _is_r_operation(operation: str) -> bool:
     return operation.startswith("data_science.r.")
+
+
+def renv_code_ref() -> str:
+    """Provenance code_ref for R tasks: RENV_LOCKFILE_HASH or hash of stub lockfile."""
+    env_hash = os.environ.get("RENV_LOCKFILE_HASH", "").strip()
+    if env_hash:
+        return env_hash
+    return hashlib.sha256(RENV_LOCKFILE_STUB.encode("utf-8")).hexdigest()
 
 
 @shared_task(name="apps.orchestration.tasks.dispatch_offload", bind=True)
@@ -64,16 +74,26 @@ def dispatch_offload(self, job_id: str) -> dict:
 @shared_task(name="apps.orchestration.tasks.run_offload_python")
 def run_offload_python(job_id: str) -> dict:
     """StubPythonOffloadExecutor — no live RunPod; marks success with synthetic digest."""
-    return _complete_stub(job_id, engine="celery", agent_name="theorem-control-plane")
+    return _complete_stub(
+        job_id,
+        engine="celery",
+        agent_name="theorem-control-plane",
+        code_ref="stub-local",
+    )
 
 
 @shared_task(name="apps.orchestration.tasks.run_offload_r", queue="offload.r")
 def run_offload_r(job_id: str) -> dict:
     """StubROffloadExecutor — queue offload.r; provenance agent name is 'R'."""
-    return _complete_stub(job_id, engine="celery", agent_name="R")
+    return _complete_stub(
+        job_id,
+        engine="celery",
+        agent_name="R",
+        code_ref=renv_code_ref(),
+    )
 
 
-def _complete_stub(job_id: str, *, engine: str, agent_name: str) -> dict:
+def _complete_stub(job_id: str, *, engine: str, agent_name: str, code_ref: str) -> dict:
     from apps.orchestration.models import Job
     from bridges.rust_provenance import StubProvenanceClient
 
@@ -107,7 +127,7 @@ def _complete_stub(job_id: str, *, engine: str, agent_name: str) -> dict:
                 "engine": engine,
                 "engine_version": TASK_VERSION,
                 "params_hash": params_hash,
-                "code_ref": "stub-local",
+                "code_ref": code_ref,
                 "started_at_ms": started_ms,
                 "ended_at_ms": ended_ms,
             },
@@ -122,7 +142,12 @@ def _complete_stub(job_id: str, *, engine: str, agent_name: str) -> dict:
             ],
         }
     )
-    return {"status": "succeeded", "output_payload_digest": out_digest}
+    return {
+        "status": "succeeded",
+        "output_payload_digest": out_digest,
+        "code_ref": code_ref,
+        "agent_name": agent_name,
+    }
 
 
 @shared_task(name="apps.orchestration.tasks.cancel_job_task")

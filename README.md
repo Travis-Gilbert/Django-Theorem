@@ -57,7 +57,7 @@ celery -A theorem_control worker -l info -Q offload.r
 | `SECRET_KEY` | Django secret |
 | `DEBUG` | Django debug flag |
 | `DATABASE_URL` | Postgres URL (PgBouncer). Local default: SQLite |
-| `VALKEY_URL` / `REDIS_URL` | Celery broker + key-revocation publish |
+| `VALKEY_URL` / `REDIS_URL` | Celery broker + org/membership cache + key-revocation publish. Empty → in-memory cache for tests |
 | `WORKOS_API_KEY` | WorkOS API (live AuthKit; optional for stubs) |
 | `WORKOS_CLIENT_ID` | WorkOS client id |
 | `WORKOS_WEBHOOK_SECRET` | HMAC secret for `POST /webhooks/workos` |
@@ -66,6 +66,7 @@ celery -A theorem_control worker -l info -Q offload.r
 | `RUNPOD_API_KEY` | RunPod GPU dispatch from Celery (stub when unset) |
 | `THEOREM_API_BASE` | Rust API base for provenance write-back |
 | `THEOREM_MACHINE_KEY` | Bearer key scoped `provenance:write` |
+| `RENV_LOCKFILE_HASH` | R worker lockfile hash stamped on provenance `code_ref` |
 | `DISABLE_SERVER_SIDE_CURSORS` | Must be `True` under PgBouncer transaction pooling |
 | `CONN_MAX_AGE` | Must be `0` under PgBouncer |
 | `CELERY_TASK_ALWAYS_EAGER` | Run tasks inline (tests / local) |
@@ -96,7 +97,7 @@ Django sets `search_path=control,public`. Settings force
 - `POST /internal/offload/invoke` — enqueue Celery task, return job id
 - `GET /internal/offload/{job_id}` — status + ArrowBatch descriptor
 - `POST /internal/offload/{job_id}/cancel`
-- `/admin/` — ops console (revoke key, re-run job, reset usage, impersonate audit)
+- `/admin/` — ops console (revoke key, re-run job, reset usage, impersonate grant)
 - `GET /healthz`
 
 ## Tests
@@ -110,6 +111,21 @@ CELERY_TASK_ALWAYS_EAGER=1 python manage.py test tests
 ```
 
 `tests/test_schema_roles.py` skips unless `DATABASE_URL` points at Postgres.
+When roles from `sql/roles.sql` are applied, it also asserts GRANT/REVOKE live
+permission errors (A1).
+
+### A3 — control schema contract (CI)
+
+After `migrate` and applying `sql/roles.sql` on a scratch Postgres, from a
+pinned Theorem checkout run:
+
+```bash
+export CONTROL_DATABASE_URL='postgres://theorem_spine:...@localhost:5432/theorem'
+cargo test -p rustyred-thg-catalog --lib control_schema_contract_holds -- --ignored
+```
+
+Wire this into CI on every Django migration change so column drift fails the
+contract before Rust read-model clients break.
 
 ## Spec
 

@@ -14,6 +14,7 @@ from ninja.errors import HttpError
 
 from apps.identity.models import Membership, User
 from apps.tenancy.models import Tenant
+from apps.tenancy.tenant_cache import invalidate_membership, set_tenant_slug_for_org
 
 logger = logging.getLogger(__name__)
 router = Router(tags=["webhooks"])
@@ -71,7 +72,7 @@ def _apply_event(event: dict) -> None:
         if not org_id:
             return
         slug = (data.get("slug") or data.get("name") or org_id).lower().replace(" ", "-")[:128]
-        Tenant.objects.update_or_create(
+        tenant, _ = Tenant.objects.update_or_create(
             workos_organization_id=org_id,
             defaults={
                 "slug": slug,
@@ -79,6 +80,8 @@ def _apply_event(event: dict) -> None:
                 "is_active": True,
             },
         )
+        # Warm org→tenant_slug cache on bind (D4).
+        set_tenant_slug_for_org(org_id, tenant.slug)
     elif event_type in (
         "organization_membership.created",
         "organization_membership.updated",
@@ -102,9 +105,26 @@ def _apply_event(event: dict) -> None:
             user=user,
             defaults={"role": role, "workos_membership_id": membership_id},
         )
+        invalidate_membership(tenant.slug, user.workos_user_id)
     elif event_type == "organization_membership.deleted":
         membership_id = data.get("id") or ""
-        Membership.objects.filter(workos_membership_id=membership_id).delete()
+        org_id = data.get("organization_id") or ""
+        user_id = data.get("user_id") or ""
+        membership = Membership.objects.filter(workos_membership_id=membership_id).select_related(
+            "tenant", "user"
+        ).first()
+        tenant_slug = ""
+        workos_user_id = user_id
+        if membership is not None:
+            tenant_slug = membership.tenant.slug
+            workos_user_id = membership.user.workos_user_id
+            membership.delete()
+        elif org_id and user_id:
+            tenant = Tenant.objects.filter(workos_organization_id=org_id).first()
+            if tenant is not None:
+                tenant_slug = tenant.slug
+        if tenant_slug and workos_user_id:
+            invalidate_membership(tenant_slug, workos_user_id)
 
 
 @router.post("/workos")

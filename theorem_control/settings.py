@@ -115,11 +115,13 @@ RUNPOD_API_KEY = env("RUNPOD_API_KEY", default="")
 THEOREM_API_BASE = env("THEOREM_API_BASE", default="http://127.0.0.1:8080")
 THEOREM_MACHINE_KEY = env("THEOREM_MACHINE_KEY", default="")
 
-VALKEY_URL = env("VALKEY_URL", default=env("REDIS_URL", default="redis://127.0.0.1:6379/0"))
+# Empty VALKEY_URL/REDIS_URL → tenant_cache uses in-memory dict (tests / no Redis).
+VALKEY_URL = env("VALKEY_URL", default=env("REDIS_URL", default=""))
+REDIS_URL = VALKEY_URL
 
 # Celery
-CELERY_BROKER_URL = VALKEY_URL
-CELERY_RESULT_BACKEND = VALKEY_URL
+CELERY_BROKER_URL = VALKEY_URL or "memory://"
+CELERY_RESULT_BACKEND = "cache+memory://" if not VALKEY_URL else VALKEY_URL
 CELERY_TASK_ALWAYS_EAGER = env.bool("CELERY_TASK_ALWAYS_EAGER", default=False)
 CELERY_TASK_EAGER_PROPAGATES = True
 CELERY_TASK_ROUTES = {

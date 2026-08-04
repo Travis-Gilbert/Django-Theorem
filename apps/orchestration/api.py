@@ -1,4 +1,4 @@
-"""Internal offload API — D7."""
+"""Internal offload API — D7 / D6 hard quota."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from django.shortcuts import get_object_or_404
 from ninja import Field, Router, Schema
 from ninja.errors import HttpError
 
+from apps.billing.models import Subscription
 from apps.orchestration.models import Job
 from apps.orchestration.tasks import dispatch_offload, cancel_job_task
 
@@ -26,6 +27,8 @@ REGISTERED_OPERATIONS = frozenset(
         "data_science.r.survival",
     }
 )
+
+ACTIVE_JOB_STATUSES = (Job.Status.QUEUED, Job.Status.RUNNING)
 
 
 class ArrowBatchDescriptor(Schema):
@@ -63,6 +66,36 @@ class JobStatusResponse(Schema):
     logs: str = ""
 
 
+def _enforce_concurrent_job_quota(tenant_id: UUID | None) -> None:
+    """Hard refuse at dispatch when queued|running jobs meet plan.limits.concurrent_jobs (D6/A7)."""
+    if tenant_id is None:
+        return
+    sub = (
+        Subscription.objects.select_related("plan")
+        .filter(tenant_id=tenant_id, status=Subscription.Status.ACTIVE)
+        .order_by("-created_at")
+        .first()
+    )
+    if sub is None:
+        return
+    limits = sub.plan.limits or {}
+    raw = limits.get("concurrent_jobs")
+    if raw is None:
+        return
+    try:
+        limit = int(raw)
+    except (TypeError, ValueError):
+        return
+    if limit < 0:
+        return
+    active = Job.objects.filter(tenant_id=tenant_id, status__in=ACTIVE_JOB_STATUSES).count()
+    if active >= limit:
+        raise HttpError(
+            429,
+            f"concurrent_jobs limit reached ({active}/{limit})",
+        )
+
+
 @router.post("/invoke", response=InvokeResponse)
 def invoke_offload(request, body: InvokeRequest):
     if body.operation not in REGISTERED_OPERATIONS:
@@ -70,7 +103,7 @@ def invoke_offload(request, body: InvokeRequest):
 
     existing = Job.objects.filter(operation_id=body.operation_id).first()
     if existing is not None:
-        if existing.status in (Job.Status.QUEUED, Job.Status.RUNNING):
+        if existing.status in ACTIVE_JOB_STATUSES:
             return InvokeResponse(
                 job_id=existing.id,
                 operation_id=existing.operation_id,
@@ -84,6 +117,8 @@ def invoke_offload(request, body: InvokeRequest):
                 status=existing.status,
                 reused=True,
             )
+
+    _enforce_concurrent_job_quota(body.tenant_id)
 
     job = Job.objects.create(
         operation=body.operation,
