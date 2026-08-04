@@ -15,9 +15,11 @@ RUN pip install -r requirements.txt
 
 COPY . .
 
+RUN chmod +x /app/scripts/railway-boot.sh
 RUN python manage.py collectstatic --noinput || true
 
 ENV PORT=8000
 EXPOSE 8000
 
-CMD ["sh", "-c", "python manage.py migrate --noinput && gunicorn theorem_control.wsgi:application --bind 0.0.0.0:${PORT} --workers 2"]
+# Create control schema (D1), migrate on direct Postgres, serve via PgBouncer.
+CMD ["/app/scripts/railway-boot.sh"]
