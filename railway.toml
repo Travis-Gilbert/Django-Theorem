@@ -1,0 +1,15 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+healthcheckPath = "/healthz"
+healthcheckTimeout = 30
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5
+
+# Web service sits in the stateless group beside commonplace-api.
+# Celery workers (default + offload.r) are separate Railway services
+# using the same image with overridden start commands, e.g.:
+#   celery -A theorem_control worker -l info
+#   celery -A theorem_control worker -l info -Q offload.r

@@ -1,0 +1,27 @@
+[project]
+name = "theorem-control-plane"
+version = "0.1.0"
+description = "Django control plane for Theorem: tenancy, identity, billing, keys, orchestration."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "Django>=5.0,<6",
+  "django-ninja>=1.3",
+  "celery>=5.4",
+  "argon2-cffi>=23.1",
+  "psycopg[binary]>=3.1",
+  "redis>=5.0",
+  "django-environ>=0.11",
+  "httpx>=0.27",
+  "gunicorn>=22.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-django"]
+
+[tool.django]
+settings_module = "theorem_control.settings"
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "theorem_control.settings"
+python_files = ["test_*.py"]
