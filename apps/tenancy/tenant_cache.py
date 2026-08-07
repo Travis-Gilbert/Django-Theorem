@@ -1,9 +1,11 @@
 """Org→tenant Valkey cache + membership invalidate (D4).
 
-Key shapes (SPEC remaining closure):
-- Org lookup (global): ``control:org:{org_id}:tenant_slug``
-- Membership cache: ``t:{tenant_slug}:control:membership:{user_id}``
-- Invalidate channel: ``control:membership:invalidate``
+Key / channel shapes (aligned with Theorem ``theorem-valkey-client`` where
+consumers exist):
+
+- Org lookup (Django-local warm cache): ``control:org:{org_id}:tenant_slug``
+- Membership cache (Django-local): ``t:{tenant_slug}:control:membership:{user_id}``
+- Invalidate channel (Rust peers): ``t:{tenant_slug}:control_apikey:membership_invalidate``
 
 Redis is optional: when ``VALKEY_URL`` / ``REDIS_URL`` is unset/empty, or the
 client cannot connect, an in-process dict backs the same API for tests.
@@ -20,9 +22,13 @@ from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
-MEMBERSHIP_INVALIDATE_CHANNEL = "control:membership:invalidate"
 ORG_KEY_TTL_SECONDS = 300
 MEMBERSHIP_KEY_TTL_SECONDS = 300
+
+
+def membership_invalidate_channel(tenant_slug: str) -> str:
+    """``t:{tenant}:control_apikey:membership_invalidate`` — Rust doctrine."""
+    return f"t:{tenant_slug}:control_apikey:membership_invalidate"
 
 _memory_lock = threading.Lock()
 _memory: dict[str, str] = {}
@@ -121,9 +127,10 @@ def invalidate_membership(tenant_id: str, user_id: str) -> None:
         )
         return
     try:
+        channel = membership_invalidate_channel(tenant_id)
         client.delete(key)
-        client.publish(MEMBERSHIP_INVALIDATE_CHANNEL, payload)
-        logger.info("invalidated membership %s on %s", key, MEMBERSHIP_INVALIDATE_CHANNEL)
+        client.publish(channel, payload)
+        logger.info("invalidated membership %s on %s", key, channel)
     except Exception as exc:  # noqa: BLE001
         logger.warning("invalidate_membership failed for %s (%s)", key, exc)
         with _memory_lock:
