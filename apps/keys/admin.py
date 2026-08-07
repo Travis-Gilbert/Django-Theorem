@@ -29,7 +29,11 @@ class ApiKeyAdmin(admin.ModelAdmin):
         for key in queryset.filter(revoked_at__isnull=True):
             key.revoked_at = now
             key.save(update_fields=["revoked_at"])
-            publish_key_revocation(str(key.id), key.key_prefix)
+            publish_key_revocation(
+                str(key.id),
+                key.key_prefix,
+                tenant_slug=key.tenant.slug,
+            )
         messages.success(request, f"Revoked {queryset.count()} key(s).")
 
     def save_model(self, request, obj, form, change):
