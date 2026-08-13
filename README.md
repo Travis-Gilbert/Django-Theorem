@@ -1,7 +1,6 @@
-=======================
+---
 Theorem Control Plane And Data Science Lab
-=======================
-
+---
 Django service for Theorem business/fleet management: tenancy, identity
 (WorkOS shadow rows), billing, machine API keys, offload orchestration,
 feature flags, and support notes.
