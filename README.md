@@ -1,22 +1,10 @@
-"""Theorem Control Plane
+=======================
+Theorem Control Plane And Data Science Lab
 =======================
 
 Django service for Theorem business/fleet management: tenancy, identity
 (WorkOS shadow rows), billing, machine API keys, offload orchestration,
 feature flags, and support notes.
-
-## The plane rule
-
-If Theorem's intelligence reasons over it, it lives in RustyRed behind the Rust
-API. If it is about running the business and the fleet, Django owns it.
-
-A Django module that imports a graph client, RustyRed wire client, or connects
-to the `spine` schema is a defect. `tests/test_boundary.py` enforces this.
-`bridges.rust_provenance` is the only allowlisted outbound bridge (HTTP
-provenance write-back to the Rust API).
-
-This repository is **not** part of the Theorem Cargo workspace and must never
-import Theorem Rust crates.
 
 ## Stack
 
