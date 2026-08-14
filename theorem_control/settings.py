@@ -127,6 +127,16 @@ OFFLOAD_EXECUTION_MODE = env("OFFLOAD_EXECUTION_MODE", default="stub").strip().l
 R_OFFLOAD_EXECUTION_MODE = env("R_OFFLOAD_EXECUTION_MODE", default="stub").strip().lower()
 RENV_LOCKFILE_PATH = env("RENV_LOCKFILE_PATH", default=str(BASE_DIR / "renv.lock"))
 
+# Neon Object Storage is S3-compatible. Only trusted Fly services receive
+# these credentials; RunPod receives operation-scoped presigned URLs instead.
+ARTIFACT_S3_ENDPOINT_URL = env("ARTIFACT_S3_ENDPOINT_URL", default="")
+ARTIFACT_S3_ACCESS_KEY_ID = env("ARTIFACT_S3_ACCESS_KEY_ID", default="")
+ARTIFACT_S3_SECRET_ACCESS_KEY = env("ARTIFACT_S3_SECRET_ACCESS_KEY", default="")
+ARTIFACT_S3_REGION = env("ARTIFACT_S3_REGION", default="")
+ARTIFACT_S3_BUCKET = env("ARTIFACT_S3_BUCKET", default="")
+ARTIFACT_PRESIGN_SECONDS = env.int("ARTIFACT_PRESIGN_SECONDS", default=900)
+ARTIFACT_MAX_BYTES = env.int("ARTIFACT_MAX_BYTES", default=64 * 1024 * 1024)
+
 THEOREM_API_BASE = env("THEOREM_API_BASE", default="http://127.0.0.1:8080")
 THEOREM_MACHINE_KEY = env("THEOREM_MACHINE_KEY", default="")
 

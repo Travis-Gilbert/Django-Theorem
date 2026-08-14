@@ -29,14 +29,14 @@ class Job(models.Model):
     operation = models.CharField(max_length=255)
     operation_id = models.CharField(
         max_length=128,
-        unique=True,
         db_index=True,
-        help_text="Idempotency key from cache_key_for_operation",
+        help_text="Tenant-scoped idempotency key from cache_key_for_operation",
     )
     status = models.CharField(max_length=32, choices=Status.choices, default=Status.QUEUED)
     celery_task_id = models.CharField(max_length=255, blank=True, default="")
     input_payload_digest = models.CharField(max_length=128, blank=True, default="")
     output_schema_json = models.TextField(blank=True, default="")
+    output_artifact_key = models.CharField(max_length=512, blank=True, default="")
     output_payload_digest = models.CharField(max_length=128, blank=True, default="")
     output_rows = models.IntegerField(null=True, blank=True)
     logs = models.TextField(blank=True, default="")
@@ -50,6 +50,12 @@ class Job(models.Model):
     class Meta:
         db_table = "control_job"
         ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tenant", "operation_id"],
+                name="control_job_tenant_operation_id_uniq",
+            )
+        ]
 
     def __str__(self) -> str:
         return f"{self.operation} [{self.status}] {self.operation_id[:12]}"

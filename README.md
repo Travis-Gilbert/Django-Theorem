@@ -47,7 +47,7 @@ preflight as the Fly R worker before starting Celery.
 | --- | --- |
 | `SECRET_KEY` | Django secret |
 | `DEBUG` | Django debug flag |
-| `DATABASE_URL` | Postgres URL (PgBouncer). Local default: SQLite |
+| `DATABASE_URL` | Direct Neon Postgres URL. Local default: SQLite |
 | `VALKEY_URL` / `REDIS_URL` | Authenticated URL for the dedicated `travis-django-theorem-valkey` Fly-private broker/cache. Empty → in-memory cache for tests |
 | `ARTIFACT_S3_ENDPOINT_URL` | Neon Object Storage S3-compatible endpoint (Fly secret) |
 | `ARTIFACT_S3_ACCESS_KEY_ID` | Neon Object Storage access key (Fly secret) |
@@ -95,11 +95,27 @@ Django sets `search_path=control,public`. Settings force
 ## HTTP surface
 
 - `POST /webhooks/workos` — WorkOS events (signature required)
-- `POST /internal/offload/invoke` — enqueue Celery task, return job id
-- `GET /internal/offload/{job_id}` — status + ArrowBatch descriptor
-- `POST /internal/offload/{job_id}/cancel`
+- `POST /internal/offload/invoke` — enqueue a tenant-bound Celery task
+- `POST /internal/offload/artifact-upload` — mint a tenant-scoped, short-lived Arrow upload URL
+- `GET /internal/offload/{job_id}` — return the caller tenant's job status + ArrowBatch descriptor
+- `POST /internal/offload/{job_id}/cancel` — cancel the caller tenant's job
 - `/admin/` — ops console (revoke key, re-run job, reset usage, impersonate grant)
 - `GET /healthz`
+
+### Offload machine-key admission
+
+Every `/internal/offload/*` request requires `Authorization: Bearer thk_...`.
+Keys are minted in the Django admin and belong to exactly one tenant; callers
+never submit a `tenant_id`. Grant only the scopes required by the caller:
+
+| Route | Required scope |
+| --- | --- |
+| `POST /invoke` | `offload:invoke` |
+| `GET /{job_id}` | `offload:read` |
+| `POST /{job_id}/cancel` | `offload:cancel` |
+
+`offload:*` grants all three offload scopes. Revoked, expired, inactive-tenant,
+or unknown keys are refused; job lookups are filtered to the admitted tenant.
 
 
 ## RunPod and R execution contract
@@ -118,14 +134,23 @@ control-plane deadline or user cancellation. The endpoint must return:
 ```
 
 inside its final `output` object. The descriptor—not Arrow bytes—crosses the
-control-plane request. The RunPod worker and the future R worker must retrieve
-and write Arrow IPC through the private `theorem-artifacts` Neon Object Storage
-bucket using that digest. The application speaks the S3-compatible API, keeping
-the handoff portable if the storage provider changes.
+control-plane request. Each live input descriptor must name an `artifact_key`
+under `tenants/<tenant-id>/`; the worker receives only a short-lived presigned
+GET for that input and PUT for the server-selected output key. Django downloads
+the output itself and verifies the reported digest, schema, and row count before
+marking the job successful. The status response mints a fresh tenant-authorized
+`download_url`; no S3 credential is returned to a caller or RunPod.
 
-The R app proves the R/rpy2/renv runtime on boot, but R operations deliberately
-fail closed until that object-store handoff and operation-specific R scripts are
-installed. It does not manufacture an output descriptor from a digest.
+Implemented operations:
+
+| Operation | Runtime | Input | Output |
+| --- | --- | --- | --- |
+| `data_science.community.assign` | RunPod Python | Arrow string `source`, `target` edges | Stable `node`, `community_id` connected components |
+| `data_science.r.survey_weight` | Fly R/rpy2 | Arrow numeric `value`, non-negative `weight` | One-row `weighted_mean`, `input_rows` table |
+
+The remaining TabFM, GNN, mixed-model, and survival operations return explicit
+errors until their operation-specific runners are implemented. They never
+manufacture an output descriptor from a digest.
 
 ## Tests
 

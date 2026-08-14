@@ -1,18 +1,19 @@
 # Theorem Offload Contract Worker
 
 This is the dedicated RunPod Serverless boundary for Django-Theorem's Python
-data-science operations. It accepts only `theorem.offload.v1`, validates the
-byte-free Arrow descriptor, and deliberately returns an error until both parts
-of the real execution seam are implemented:
+data-science operations. It accepts only `theorem.offload.v1` and validates a
+byte-free Arrow descriptor. It receives only time-limited, tenant-scoped
+capabilities instead of an object-store credential:
 
-1. content-addressed Arrow artifact lookup and output write through the private
-   `theorem-artifacts` Neon Object Storage bucket; and
-2. an operation-specific runner for each registered TabFM, GNN, and community
-   operation.
+1. a presigned GET for the content-addressed Arrow input and a presigned PUT
+   for the Django-selected output key in the private `theorem-artifacts` Neon
+   Object Storage bucket; and
+2. the implemented `data_science.community.assign` runner, which returns
+   deterministic connected components from string `source`/`target` edges.
 
-It must not return a synthetic descriptor. A successful RunPod response is
-treated as a derivation by the control plane, so success without execution would
-forge provenance.
+TabFM and GNN requests still return explicit errors. Django re-downloads every
+claimed output and checks its digest, schema, and row count before it records a
+successful computation/provenance record.
 
 Build and publish via the `publish-theorem-offload-worker` workflow. If GitHub
 Actions is unavailable, the `fly.image.toml` configuration supports a remote,

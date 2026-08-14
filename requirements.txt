@@ -7,6 +7,8 @@ redis>=5.0
 django-environ>=0.11
 httpx>=0.27
 gunicorn>=22.0
+boto3>=1.37
+pyarrow>=19.0
 
 # dev / test
 pytest>=8.0
