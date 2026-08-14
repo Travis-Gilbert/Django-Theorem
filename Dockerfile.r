@@ -3,11 +3,14 @@
 # to every live R activity as code_ref.
 FROM rocker/r-ver:4.4.3
 
+# rpy2 loads R packages into Python; their shared objects resolve libR.so
+# through the dynamic loader rather than through R's launcher script.
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    PATH="/opt/venv/bin:${PATH}"
+    PATH="/opt/venv/bin:${PATH}" \
+    LD_LIBRARY_PATH="/usr/local/lib/R/lib"
 
 WORKDIR /app
 
@@ -30,5 +33,6 @@ RUN R --vanilla --slave -e 'install.packages("renv", repos = "https://cloud.r-pr
     && R --vanilla --slave -e 'renv::restore(lockfile = "/app/renv.lock", prompt = FALSE)'
 
 COPY . .
+RUN chmod +x /app/scripts/start-r-worker.sh
 
-CMD ["sh", "-c", "python -m apps.orchestration.r_runtime --check && celery -A theorem_control worker -l info -Q offload.r"]
+CMD ["/app/scripts/start-r-worker.sh"]

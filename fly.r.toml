@@ -2,9 +2,10 @@
 # Python worker stay small; deploy it independently after setting the listed
 # secrets on this app as well.
 #
-# Required secrets: DATABASE_URL, SECRET_KEY, THEOREM_MACHINE_KEY, and any
-# enabled WorkOS/Stripe credentials. DATABASE_URL must be the pooled URL for
-# the imported Neon default branch. R jobs do not require RUNPOD_API_KEY.
+# Required secrets: DATABASE_URL, SECRET_KEY, VALKEY_URL, THEOREM_MACHINE_KEY,
+# ARTIFACT_S3_* credentials, and any enabled WorkOS/Stripe credentials.
+# DATABASE_URL must be the pooled URL for the imported Neon default branch.
+# R jobs do not require RUNPOD_API_KEY.
 
 app = "travis-django-theorem-r"
 primary_region = "iad"
@@ -19,12 +20,11 @@ kill_timeout = "30s"
   DISABLE_SERVER_SIDE_CURSORS = "True"
   CONN_MAX_AGE = "0"
   THEOREM_API_BASE = "http://travis-theorem-personal.internal:8080"
-  VALKEY_URL = "redis://travis-theorem-personal-valkey.internal:6379/0"
   R_OFFLOAD_EXECUTION_MODE = "rpy2"
   RENV_LOCKFILE_PATH = "/app/renv.lock"
 
 [processes]
-  data_science = "python -m apps.orchestration.r_runtime --check && celery -A theorem_control worker -l info -Q offload.r"
+  data_science = "/app/scripts/start-r-worker.sh"
 
 [[vm]]
   cpu_kind = "shared"

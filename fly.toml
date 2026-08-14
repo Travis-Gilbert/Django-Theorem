@@ -1,9 +1,10 @@
 # Fly deployment contract for the Django-Theorem control plane.
 #
 # Required Fly secrets (never commit their values): DATABASE_URL (pooled Neon
-# URL), MIGRATE_DATABASE_URL (direct Neon URL), SECRET_KEY, THEOREM_MACHINE_KEY,
-# RUNPOD_API_KEY, and RUNPOD_SERVERLESS_ENDPOINT_ID. Both database URLs must
-# select the imported production-data branch, not the abandoned Neon Auth branch.
+# URL), MIGRATE_DATABASE_URL (direct Neon URL), SECRET_KEY, VALKEY_URL,
+# THEOREM_MACHINE_KEY, RUNPOD_API_KEY, RUNPOD_SERVERLESS_ENDPOINT_ID, and the
+# ARTIFACT_S3_* credentials. Both database URLs must select the imported
+# production-data branch, not the abandoned Neon Auth branch.
 
 app = "travis-django-theorem-personal"
 primary_region = "iad"
@@ -20,7 +21,6 @@ kill_timeout = "30s"
   DISABLE_SERVER_SIDE_CURSORS = "True"
   CONN_MAX_AGE = "0"
   THEOREM_API_BASE = "http://travis-theorem-personal.internal:8080"
-  VALKEY_URL = "redis://travis-theorem-personal-valkey.internal:6379/0"
   # The endpoint and API key stay in Fly secrets. A RunPod job must return the
   # theorem.offload.v1 Arrow descriptor; malformed outputs fail the job.
   OFFLOAD_EXECUTION_MODE = "runpod"
@@ -47,6 +47,7 @@ kill_timeout = "30s"
     method = "GET"
     path = "/healthz"
     protocol = "http"
+    headers = { Host = "travis-django-theorem-personal.fly.dev", X-Forwarded-Proto = "https" }
 
 [[vm]]
   cpu_kind = "shared"

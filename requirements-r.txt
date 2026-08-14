@@ -1,4 +1,6 @@
 -r requirements.txt
 
-# Installed only in Dockerfile.r. The web/Python-worker image remains small.
-rpy2>=3.5,<3.7
+# Installed only in Dockerfile.r. rpy2 3.6 requires the R 4.5 API (including
+# R_getVar), while this worker deliberately pins R 4.4.3.
+# The web/Python-worker image remains small.
+rpy2==3.5.17

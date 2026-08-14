@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 from pathlib import Path
 
 from django.conf import settings
@@ -38,6 +39,9 @@ def main() -> int:
     parser.add_argument("--check", action="store_true", help="validate R/rpy2 and renv.lock")
     args = parser.parse_args()
     if args.check:
+        # Celery configures Django itself, but this preflight also runs as a
+        # standalone module before Celery is started by the R worker entrypoint.
+        os.environ.setdefault("DJANGO_SETTINGS_MODULE", "theorem_control.settings")
         print(f"R runtime ready: {runtime_identity()}; lock={renv_lockfile_hash()}")
     return 0
 

@@ -48,7 +48,12 @@ preflight as the Fly R worker before starting Celery.
 | `SECRET_KEY` | Django secret |
 | `DEBUG` | Django debug flag |
 | `DATABASE_URL` | Postgres URL (PgBouncer). Local default: SQLite |
-| `VALKEY_URL` / `REDIS_URL` | Celery broker + org/membership cache + key-revocation publish. Empty → in-memory cache for tests |
+| `VALKEY_URL` / `REDIS_URL` | Authenticated URL for the dedicated `travis-django-theorem-valkey` Fly-private broker/cache. Empty → in-memory cache for tests |
+| `ARTIFACT_S3_ENDPOINT_URL` | Neon Object Storage S3-compatible endpoint (Fly secret) |
+| `ARTIFACT_S3_ACCESS_KEY_ID` | Neon Object Storage access key (Fly secret) |
+| `ARTIFACT_S3_SECRET_ACCESS_KEY` | Neon Object Storage secret key (Fly secret) |
+| `ARTIFACT_S3_REGION` | Neon Object Storage region (Fly secret) |
+| `ARTIFACT_S3_BUCKET` | Private Neon Object Storage bucket for Arrow artifacts |
 | `WORKOS_API_KEY` | WorkOS API (live AuthKit; optional for stubs) |
 | `WORKOS_CLIENT_ID` | WorkOS client id |
 | `WORKOS_WEBHOOK_SECRET` | HMAC secret for `POST /webhooks/workos` |
@@ -114,7 +119,9 @@ control-plane deadline or user cancellation. The endpoint must return:
 
 inside its final `output` object. The descriptor—not Arrow bytes—crosses the
 control-plane request. The RunPod worker and the future R worker must retrieve
-and write Arrow IPC through the selected object store using that digest.
+and write Arrow IPC through the private `theorem-artifacts` Neon Object Storage
+bucket using that digest. The application speaks the S3-compatible API, keeping
+the handoff portable if the storage provider changes.
 
 The R app proves the R/rpy2/renv runtime on boot, but R operations deliberately
 fail closed until that object-store handoff and operation-specific R scripts are
