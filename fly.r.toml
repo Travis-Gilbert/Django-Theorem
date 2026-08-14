@@ -4,7 +4,9 @@
 #
 # Required secrets: DATABASE_URL, SECRET_KEY, VALKEY_URL, THEOREM_MACHINE_KEY,
 # ARTIFACT_S3_* credentials, and any enabled WorkOS/Stripe credentials.
-# DATABASE_URL must be the pooled URL for the imported Neon default branch.
+# DATABASE_URL must be the direct URL for the imported Neon default branch.
+# Django selects the isolated control schema with a startup search_path option,
+# which Neon pooler connections intentionally reject.
 # R jobs do not require RUNPOD_API_KEY.
 
 app = "travis-django-theorem-r"
