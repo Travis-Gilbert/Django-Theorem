@@ -14,6 +14,9 @@ It must not return a synthetic descriptor. A successful RunPod response is
 treated as a derivation by the control plane, so success without execution would
 forge provenance.
 
-Build and publish via the `publish-theorem-offload-worker` workflow. Configure
-the resulting immutable GHCR digest as `RUNPOD_WORKER_IMAGE_DIGEST` in the Fly
-control-plane app and select that exact image for the RunPod endpoint.
+Build and publish via the `publish-theorem-offload-worker` workflow. If GitHub
+Actions is unavailable, the `fly.image.toml` configuration supports a remote,
+image-only Fly build with `fly deploy --build-only --push`; it creates no Fly
+Machine. Configure the resulting immutable image reference as
+`RUNPOD_WORKER_IMAGE_DIGEST` in the Fly control-plane app and select that exact
+image for the RunPod endpoint.

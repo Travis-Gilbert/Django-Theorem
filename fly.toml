@@ -1,7 +1,7 @@
 # Fly deployment contract for the Django-Theorem control plane.
 #
-# Required Fly secrets (never commit their values): DATABASE_URL (pooled Neon
-# URL), MIGRATE_DATABASE_URL (direct Neon URL), SECRET_KEY, VALKEY_URL,
+# Required Fly secrets (never commit their values): DATABASE_URL and
+# MIGRATE_DATABASE_URL (direct Neon URLs), SECRET_KEY, VALKEY_URL,
 # THEOREM_MACHINE_KEY, RUNPOD_API_KEY, RUNPOD_SERVERLESS_ENDPOINT_ID, and the
 # ARTIFACT_S3_* credentials. Both database URLs must select the imported
 # production-data branch, not the abandoned Neon Auth branch.

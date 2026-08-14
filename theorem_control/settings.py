@@ -68,9 +68,10 @@ TEMPLATES = [
 WSGI_APPLICATION = "theorem_control.wsgi.application"
 
 # ---------------------------------------------------------------------------
-# Database — PgBouncer transaction pooling (D10)
-# DISABLE_SERVER_SIDE_CURSORS + CONN_MAX_AGE=0 are mandatory under pooling.
-# Schema `control` is selected via search_path; spine is unreachable.
+# Database — direct Neon Postgres (D10)
+# CONN_MAX_AGE=0 avoids holding connections across requests. Schema `control`
+# is selected via a startup search_path option; Neon's pooler rejects that
+# option, so the deployed DATABASE_URL must target the direct endpoint.
 # ---------------------------------------------------------------------------
 _db_url = env("DATABASE_URL", default=f"sqlite:///{BASE_DIR / 'db.sqlite3'}")
 DATABASES = {"default": env.db_url_config(_db_url)}
