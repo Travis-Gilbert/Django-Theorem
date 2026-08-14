@@ -110,7 +110,21 @@ WORKOS_WEBHOOK_SECRET = env("WORKOS_WEBHOOK_SECRET", default="test-webhook-secre
 STRIPE_API_KEY = env("STRIPE_API_KEY", default="")
 STRIPE_WEBHOOK_SECRET = env("STRIPE_WEBHOOK_SECRET", default="")
 
+# RunPod is an explicitly configured Serverless executor. Keeping the endpoint
+# identifier separate from the API key lets the same deployment route only the
+# intended Theorem worker image.
 RUNPOD_API_KEY = env("RUNPOD_API_KEY", default="")
+RUNPOD_SERVERLESS_ENDPOINT_ID = env("RUNPOD_SERVERLESS_ENDPOINT_ID", default="")
+RUNPOD_API_BASE = env("RUNPOD_API_BASE", default="https://api.runpod.ai/v2")
+RUNPOD_REQUEST_TIMEOUT_SECONDS = env.float("RUNPOD_REQUEST_TIMEOUT_SECONDS", default=30.0)
+RUNPOD_JOB_TIMEOUT_SECONDS = env.int("RUNPOD_JOB_TIMEOUT_SECONDS", default=900)
+RUNPOD_POLL_INTERVAL_SECONDS = env.float("RUNPOD_POLL_INTERVAL_SECONDS", default=5.0)
+# This is a provenance identifier, not a registry credential. It must be an
+# immutable image digest for the worker serving RUNPOD_SERVERLESS_ENDPOINT_ID.
+RUNPOD_WORKER_IMAGE_DIGEST = env("RUNPOD_WORKER_IMAGE_DIGEST", default="")
+OFFLOAD_EXECUTION_MODE = env("OFFLOAD_EXECUTION_MODE", default="stub").strip().lower()
+R_OFFLOAD_EXECUTION_MODE = env("R_OFFLOAD_EXECUTION_MODE", default="stub").strip().lower()
+RENV_LOCKFILE_PATH = env("RENV_LOCKFILE_PATH", default=str(BASE_DIR / "renv.lock"))
 
 THEOREM_API_BASE = env("THEOREM_API_BASE", default="http://127.0.0.1:8080")
 THEOREM_MACHINE_KEY = env("THEOREM_MACHINE_KEY", default="")

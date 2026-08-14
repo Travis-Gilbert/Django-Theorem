@@ -11,7 +11,8 @@ feature flags, and support notes.
 - Celery (broker: Valkey/Redis)
 - argon2-cffi (machine key hashes)
 - psycopg (Postgres via PgBouncer)
-- Separate Celery queue `offload.r` for R workloads (agent name `"R"`)
+- RunPod Serverless v2 lifecycle client for GPU/Python workloads
+- Separate Fly app and Celery queue `offload.r` for R workloads (agent name `"R"`)
 
 ## Quick start
 
@@ -31,11 +32,14 @@ Celery worker (default queue):
 celery -A theorem_control worker -l info
 ```
 
-R queue worker (separate image with R + renv pinned):
+R queue worker (separate image with pinned R + renv + rpy2):
 
 ```bash
 celery -A theorem_control worker -l info -Q offload.r
 ```
+
+The deployment image is `Dockerfile.r`; it performs the same R/rpy2/renv
+preflight as the Fly R worker before starting Celery.
 
 ## Environment variables
 
@@ -50,10 +54,15 @@ celery -A theorem_control worker -l info -Q offload.r
 | `WORKOS_WEBHOOK_SECRET` | HMAC secret for `POST /webhooks/workos` |
 | `STRIPE_API_KEY` | Stripe (billing; stub-tolerant) |
 | `STRIPE_WEBHOOK_SECRET` | Stripe webhooks |
-| `RUNPOD_API_KEY` | RunPod GPU dispatch from Celery (stub when unset) |
+| `OFFLOAD_EXECUTION_MODE` | `stub` for local/tests; `runpod` for the production Python worker |
+| `RUNPOD_API_KEY` | RunPod Serverless API key (Fly secret) |
+| `RUNPOD_SERVERLESS_ENDPOINT_ID` | Queue-based endpoint that accepts `theorem.offload.v1` jobs (Fly secret) |
+| `RUNPOD_WORKER_IMAGE_DIGEST` | Immutable worker image digest stamped on RunPod provenance |
+| `RUNPOD_JOB_TIMEOUT_SECONDS` | Control-plane deadline; timeout cancels the RunPod job |
+| `R_OFFLOAD_EXECUTION_MODE` | `stub` for local/tests; `rpy2` only in the R worker image |
 | `THEOREM_API_BASE` | Rust API base for provenance write-back |
 | `THEOREM_MACHINE_KEY` | Bearer key scoped `provenance:write` |
-| `RENV_LOCKFILE_HASH` | R worker lockfile hash stamped on provenance `code_ref` |
+| `RENV_LOCKFILE_PATH` | Pinned R worker `renv.lock`; SHA-256 becomes provenance `code_ref` |
 | `DISABLE_SERVER_SIDE_CURSORS` | Must be `True` under PgBouncer transaction pooling |
 | `CONN_MAX_AGE` | Must be `0` under PgBouncer |
 | `CELERY_TASK_ALWAYS_EAGER` | Run tasks inline (tests / local) |
@@ -86,6 +95,30 @@ Django sets `search_path=control,public`. Settings force
 - `POST /internal/offload/{job_id}/cancel`
 - `/admin/` — ops console (revoke key, re-run job, reset usage, impersonate grant)
 - `GET /healthz`
+
+
+## RunPod and R execution contract
+
+The default Python worker submits an asynchronous job to
+`POST /v2/{endpoint}/run`, persists the returned RunPod job id in `control_job`,
+polls `GET /v2/{endpoint}/status/{job_id}`, and cancels the remote job on the
+control-plane deadline or user cancellation. The endpoint must return:
+
+```json
+{
+  "schema_json": "<Arrow schema JSON>",
+  "rows": 42,
+  "payload_digest": "sha256:<content-addressed-output>"
+}
+```
+
+inside its final `output` object. The descriptor—not Arrow bytes—crosses the
+control-plane request. The RunPod worker and the future R worker must retrieve
+and write Arrow IPC through the selected object store using that digest.
+
+The R app proves the R/rpy2/renv runtime on boot, but R operations deliberately
+fail closed until that object-store handoff and operation-specific R scripts are
+installed. It does not manufacture an output descriptor from a digest.
 
 ## Tests
 

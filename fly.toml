@@ -2,8 +2,8 @@
 #
 # Required Fly secrets (never commit their values): DATABASE_URL (pooled Neon
 # URL), MIGRATE_DATABASE_URL (direct Neon URL), SECRET_KEY, THEOREM_MACHINE_KEY,
-# and any enabled WorkOS, Stripe, or RunPod credentials. Both database URLs must
-# select the imported production-data branch, not the empty Neon Auth branch.
+# RUNPOD_API_KEY, and RUNPOD_SERVERLESS_ENDPOINT_ID. Both database URLs must
+# select the imported production-data branch, not the abandoned Neon Auth branch.
 
 app = "travis-django-theorem-personal"
 primary_region = "iad"
@@ -21,6 +21,9 @@ kill_timeout = "30s"
   CONN_MAX_AGE = "0"
   THEOREM_API_BASE = "http://travis-theorem-personal.internal:8080"
   VALKEY_URL = "redis://travis-theorem-personal-valkey.internal:6379/0"
+  # The endpoint and API key stay in Fly secrets. A RunPod job must return the
+  # theorem.offload.v1 Arrow descriptor; malformed outputs fail the job.
+  OFFLOAD_EXECUTION_MODE = "runpod"
 
 [processes]
   # Applies migrations through MIGRATE_DATABASE_URL, then serves the Django
@@ -28,10 +31,6 @@ kill_timeout = "30s"
   web = "/app/scripts/railway-boot.sh"
   # Python offload/control-plane jobs.
   worker = "celery -A theorem_control worker -l info -Q celery"
-  # The offload.r queue is isolated now. Its current executor is explicitly a
-  # stub; replace it with the pinned R/renv image before treating this as a
-  # production data-science oracle.
-  data_science = "celery -A theorem_control worker -l info -Q offload.r"
 
 [http_service]
   internal_port = 8000

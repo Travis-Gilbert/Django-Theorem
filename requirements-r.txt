@@ -1,0 +1,4 @@
+-r requirements.txt
+
+# Installed only in Dockerfile.r. The web/Python-worker image remains small.
+rpy2>=3.5,<3.7

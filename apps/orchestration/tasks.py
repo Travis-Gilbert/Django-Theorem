@@ -1,11 +1,11 @@
-"""Celery offload task stubs — routed by operation name; idempotent on operation_id.
+"""Celery offload tasks — routed by operation name; idempotent on operation_id.
 
 R queue
 -------
-Tasks whose operation starts with ``data_science.r.`` (and ``run_offload_r``) are
-routed to Celery queue ``offload.r``. Provenance agent name for those activities
-is ``"R"`` (SPEC D9). Workers for that queue pin R + renv; light workers stay
-on the default queue.
+Tasks whose operation starts with ``data_science.r.`` are queued onto
+``offload.r``. The base control-plane worker dispatches GPU/Python operations to
+RunPod Serverless; the dedicated R worker keeps the R runtime separate from the
+web and light-worker image.
 """
 
 from __future__ import annotations
@@ -14,13 +14,24 @@ import hashlib
 import json
 import logging
 import os
+from collections.abc import Mapping
+from typing import Any
 
 from celery import shared_task
+from django.conf import settings
 from django.utils import timezone as dj_timezone
+
+from apps.orchestration.runpod import (
+    RunpodApiError,
+    RunpodConfigurationError,
+    RunpodServerlessClient,
+    RunpodTimeoutError,
+)
 
 logger = logging.getLogger(__name__)
 
-TASK_VERSION = "0.1.0-stub"
+TASK_VERSION = "0.2.0"
+STUB_TASK_VERSION = "0.1.0-stub"
 RENV_LOCKFILE_STUB = "renv.lock:stub"
 
 
@@ -29,10 +40,14 @@ def _is_r_operation(operation: str) -> bool:
 
 
 def renv_code_ref() -> str:
-    """Provenance code_ref for R tasks: RENV_LOCKFILE_HASH or hash of stub lockfile."""
+    """Provenance code_ref for R tasks: the active immutable renv lockfile."""
     env_hash = os.environ.get("RENV_LOCKFILE_HASH", "").strip()
     if env_hash:
         return env_hash
+    if settings.R_OFFLOAD_EXECUTION_MODE == "rpy2":
+        from apps.orchestration.r_runtime import renv_lockfile_hash
+
+        return renv_lockfile_hash()
     return hashlib.sha256(RENV_LOCKFILE_STUB.encode("utf-8")).hexdigest()
 
 
@@ -67,13 +82,29 @@ def dispatch_offload(self, job_id: str) -> dict:
     job.save(update_fields=["status", "started_at", "celery_task_id", "updated_at"])
 
     if _is_r_operation(job.operation):
-        return run_offload_r(str(job.id))
+        # Calling the task directly here would execute it on the default worker
+        # and silently bypass the dedicated R image. apply_async preserves the
+        # queue boundary even when CELERY_TASK_ALWAYS_EAGER is used in tests.
+        result = run_offload_r.apply_async(args=[str(job.id)], queue=settings.CELERY_R_QUEUE)
+        job.celery_task_id = result.id or job.celery_task_id
+        job.save(update_fields=["celery_task_id", "updated_at"])
+        return {"status": "queued", "celery_task_id": job.celery_task_id}
     return run_offload_python(str(job.id))
 
 
 @shared_task(name="apps.orchestration.tasks.run_offload_python")
 def run_offload_python(job_id: str) -> dict:
-    """StubPythonOffloadExecutor — no live RunPod; marks success with synthetic digest."""
+    """Execute Python/GPU offload through the configured RunPod Serverless endpoint."""
+    if settings.OFFLOAD_EXECUTION_MODE == "runpod":
+        return _run_runpod_offload(job_id)
+    if settings.OFFLOAD_EXECUTION_MODE != "stub":
+        return _fail_job(
+            job_id,
+            f"unsupported OFFLOAD_EXECUTION_MODE={settings.OFFLOAD_EXECUTION_MODE!r}",
+            log_prefix="RunPod",
+        )
+    # Explicit deterministic stand-in for local/tests only. It is never a live
+    # data-science oracle.
     return _complete_stub(
         job_id,
         engine="celery",
@@ -84,7 +115,16 @@ def run_offload_python(job_id: str) -> dict:
 
 @shared_task(name="apps.orchestration.tasks.run_offload_r", queue="offload.r")
 def run_offload_r(job_id: str) -> dict:
-    """StubROffloadExecutor — queue offload.r; provenance agent name is 'R'."""
+    """Run on the dedicated R queue; production boot verifies R through rpy2."""
+    if settings.R_OFFLOAD_EXECUTION_MODE == "rpy2":
+        return _run_r_offload(job_id)
+    if settings.R_OFFLOAD_EXECUTION_MODE != "stub":
+        return _fail_job(
+            job_id,
+            f"unsupported R_OFFLOAD_EXECUTION_MODE={settings.R_OFFLOAD_EXECUTION_MODE!r}",
+            log_prefix="R",
+        )
+    # Explicit deterministic stand-in for local/tests only.
     return _complete_stub(
         job_id,
         engine="celery",
@@ -125,13 +165,13 @@ def _complete_stub(job_id: str, *, engine: str, agent_name: str, code_ref: str) 
             "activity": {
                 "name": job.operation,
                 "engine": engine,
-                "engine_version": TASK_VERSION,
+                "engine_version": STUB_TASK_VERSION,
                 "params_hash": params_hash,
                 "code_ref": code_ref,
                 "started_at_ms": started_ms,
                 "ended_at_ms": ended_ms,
             },
-            "agent": {"kind": "tool", "name": agent_name, "version": TASK_VERSION},
+            "agent": {"kind": "tool", "name": agent_name, "version": STUB_TASK_VERSION},
             "inputs": job.kwargs_json.get("input_entity_ids") or [],
             "outputs": [
                 {
@@ -150,6 +190,207 @@ def _complete_stub(job_id: str, *, engine: str, agent_name: str, code_ref: str) 
     }
 
 
+def _runpod_input(job) -> dict[str, Any]:
+    """The versioned, byte-free input contract accepted by Theorem RunPod workers."""
+    return {
+        "contract": "theorem.offload.v1",
+        "operation": job.operation,
+        "operation_id": job.operation_id,
+        "input": {
+            "schema_json": job.kwargs_json.get("input_schema_json", ""),
+            "rows": job.kwargs_json.get("input_rows"),
+            "payload_digest": job.input_payload_digest,
+        },
+        "params": job.kwargs_json.get("params") or {},
+    }
+
+
+def _append_log(job, line: str) -> None:
+    # Status/log persistence is bounded so a verbose remote worker cannot turn a
+    # control-plane record into an unbounded payload store.
+    job.logs = f"{job.logs}{line.rstrip()}\n"[-16_000:]
+
+
+def _fail_job(job_id: str, error: str, *, log_prefix: str) -> dict[str, str]:
+    from apps.orchestration.models import Job
+
+    job = Job.objects.get(id=job_id)
+    if job.status == Job.Status.CANCELED:
+        return {"status": "canceled"}
+    job.status = Job.Status.FAILED
+    job.error = error
+    job.ended_at = dj_timezone.now()
+    _append_log(job, f"[{log_prefix}] failed: {error}")
+    job.save(update_fields=["status", "error", "ended_at", "logs", "updated_at"])
+    return {"status": "failed", "error": error}
+
+
+def _output_descriptor(output: Any) -> tuple[str, int | None, str]:
+    """Validate the worker's Arrow descriptor instead of accepting a fake result."""
+    if not isinstance(output, Mapping):
+        raise ValueError("RunPod output must be an ArrowBatch descriptor object")
+    schema_json = output.get("schema_json")
+    payload_digest = output.get("payload_digest")
+    rows = output.get("rows")
+    if not isinstance(schema_json, str):
+        raise ValueError("RunPod output.schema_json must be a string")
+    if not isinstance(payload_digest, str) or not payload_digest.strip():
+        raise ValueError("RunPod output.payload_digest must be a non-empty string")
+    if rows is not None and (not isinstance(rows, int) or isinstance(rows, bool) or rows < 0):
+        raise ValueError("RunPod output.rows must be a non-negative integer or null")
+    return schema_json, rows, payload_digest
+
+
+def _post_provenance(job, *, engine: str, agent_name: str, code_ref: str) -> None:
+    from bridges.rust_provenance import StubProvenanceClient
+
+    started_ms = int((job.started_at or dj_timezone.now()).timestamp() * 1000)
+    ended_ms = int((job.ended_at or dj_timezone.now()).timestamp() * 1000)
+    params_hash = hashlib.sha256(
+        json.dumps(job.kwargs_json.get("params") or {}, sort_keys=True).encode()
+    ).hexdigest()
+    StubProvenanceClient().post_derivation(
+        {
+            "activity": {
+                "name": job.operation,
+                "engine": engine,
+                "engine_version": TASK_VERSION,
+                "params_hash": params_hash,
+                "code_ref": code_ref,
+                "started_at_ms": started_ms,
+                "ended_at_ms": ended_ms,
+            },
+            "agent": {"kind": "tool", "name": agent_name, "version": TASK_VERSION},
+            "inputs": job.kwargs_json.get("input_entity_ids") or [],
+            "outputs": [
+                {
+                    "kind": "artifact",
+                    "name": f"{job.operation}:output",
+                    "content_hash": job.output_payload_digest,
+                }
+            ],
+        }
+    )
+
+
+def _run_runpod_offload(job_id: str) -> dict[str, str]:
+    from apps.orchestration.models import Job
+
+    job = Job.objects.get(id=job_id)
+    if job.status == Job.Status.CANCELED:
+        return {"status": "canceled"}
+    try:
+        client = RunpodServerlessClient(
+            api_key=settings.RUNPOD_API_KEY,
+            endpoint_id=settings.RUNPOD_SERVERLESS_ENDPOINT_ID,
+            base_url=settings.RUNPOD_API_BASE,
+            timeout_seconds=settings.RUNPOD_REQUEST_TIMEOUT_SECONDS,
+        )
+        if not settings.RUNPOD_WORKER_IMAGE_DIGEST:
+            raise RunpodConfigurationError("RUNPOD_WORKER_IMAGE_DIGEST is required for provenance")
+        submitted = client.submit(_runpod_input(job))
+        metadata = dict(job.kwargs_json)
+        metadata["runpod"] = {
+            "endpoint_id": settings.RUNPOD_SERVERLESS_ENDPOINT_ID,
+            "job_id": submitted.job_id,
+        }
+        job.kwargs_json = metadata
+        _append_log(job, f"[RunPod] submitted {submitted.job_id}: {submitted.status}")
+        job.save(update_fields=["kwargs_json", "logs", "updated_at"])
+
+        last_status = ""
+        last_logs_hash = ""
+
+        def persist_status(state: Mapping[str, Any]) -> None:
+            nonlocal last_logs_hash, last_status
+            status = str(state["status"])
+            changed = False
+            if status != last_status:
+                _append_log(job, f"[RunPod] {submitted.job_id}: {status}")
+                last_status = status
+                changed = True
+            remote_logs = state.get("logs")
+            if remote_logs:
+                rendered_logs = (
+                    remote_logs
+                    if isinstance(remote_logs, str)
+                    else json.dumps(remote_logs, sort_keys=True)
+                )
+                logs_hash = hashlib.sha256(rendered_logs.encode()).hexdigest()
+                if logs_hash != last_logs_hash:
+                    _append_log(job, f"[RunPod remote] {rendered_logs[-2_000:]}")
+                    last_logs_hash = logs_hash
+                    changed = True
+            if changed:
+                job.save(update_fields=["logs", "updated_at"])
+
+        result = client.wait(
+            submitted.job_id,
+            timeout_seconds=settings.RUNPOD_JOB_TIMEOUT_SECONDS,
+            poll_interval_seconds=settings.RUNPOD_POLL_INTERVAL_SECONDS,
+            on_update=persist_status,
+        )
+    except (RunpodApiError, RunpodConfigurationError, RunpodTimeoutError) as exc:
+        return _fail_job(job_id, str(exc), log_prefix="RunPod")
+
+    if result["status"] != RunpodServerlessClient.SUCCESS:
+        return _fail_job(
+            job_id,
+            str(result.get("error") or f"RunPod job finished as {result['status']}"),
+            log_prefix="RunPod",
+        )
+    try:
+        schema_json, rows, payload_digest = _output_descriptor(result.get("output"))
+    except ValueError as exc:
+        return _fail_job(job_id, str(exc), log_prefix="RunPod")
+
+    job.refresh_from_db()
+    if job.status == Job.Status.CANCELED:
+        return {"status": "canceled"}
+    job.output_schema_json = schema_json
+    job.output_rows = rows
+    job.output_payload_digest = payload_digest
+    job.status = Job.Status.SUCCEEDED
+    job.ended_at = dj_timezone.now()
+    _append_log(job, f"[RunPod] completed {submitted.job_id}")
+    job.save()
+    _post_provenance(
+        job,
+        engine="runpod-serverless",
+        agent_name="theorem-control-plane",
+        code_ref=settings.RUNPOD_WORKER_IMAGE_DIGEST,
+    )
+    return {
+        "status": "succeeded",
+        "output_payload_digest": payload_digest,
+        "runpod_job_id": submitted.job_id,
+    }
+
+
+def _run_r_offload(job_id: str) -> dict[str, str]:
+    """Verify the real R runtime, then refuse until the object-store runner lands.
+
+    R operation semantics are intentionally not synthesized from an Arrow digest:
+    the pending R2/object-store handoff is the only source of the payload bytes.
+    Returning success here would manufacture a provenance result without running
+    survey, mixed-model, or survival computation.
+    """
+    try:
+        from apps.orchestration.r_runtime import runtime_identity
+
+        identity = runtime_identity()
+        lockfile_hash = renv_code_ref()
+    except RuntimeError as exc:
+        return _fail_job(job_id, str(exc), log_prefix="R")
+    return _fail_job(
+        job_id,
+        "R runtime is ready "
+        f"({identity}; renv={lockfile_hash}), but R data-science execution is blocked "
+        "until the R2 Arrow artifact handoff and operation-specific scripts are configured",
+        log_prefix="R",
+    )
+
+
 @shared_task(name="apps.orchestration.tasks.cancel_job_task")
 def cancel_job_task(job_id: str) -> dict:
     from apps.orchestration.models import Job
@@ -160,9 +401,20 @@ def cancel_job_task(job_id: str) -> dict:
         return {"error": "missing"}
     if job.celery_task_id:
         current_app.control.revoke(job.celery_task_id, terminate=False)
+    remote_job_id = (job.kwargs_json.get("runpod") or {}).get("job_id")
+    if remote_job_id and settings.OFFLOAD_EXECUTION_MODE == "runpod":
+        try:
+            RunpodServerlessClient(
+                api_key=settings.RUNPOD_API_KEY,
+                endpoint_id=settings.RUNPOD_SERVERLESS_ENDPOINT_ID,
+                base_url=settings.RUNPOD_API_BASE,
+                timeout_seconds=settings.RUNPOD_REQUEST_TIMEOUT_SECONDS,
+            ).cancel(str(remote_job_id))
+        except (RunpodApiError, RunpodConfigurationError) as exc:
+            _append_log(job, f"[RunPod] remote cancel deferred: {exc}")
     job.status = Job.Status.CANCELED
     job.ended_at = dj_timezone.now()
-    job.save(update_fields=["status", "ended_at", "updated_at"])
+    job.save(update_fields=["status", "ended_at", "logs", "updated_at"])
     return {"status": "canceled"}
 
 
