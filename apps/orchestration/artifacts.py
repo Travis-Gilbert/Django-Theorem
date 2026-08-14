@@ -124,7 +124,9 @@ class ArtifactStore:
             region_name=region,
             aws_access_key_id=access_key_id,
             aws_secret_access_key=secret_access_key,
-            config=Config(signature_version="s3v4", s3={"addressing_style": "virtual"}),
+            # Neon object storage presents TLS for its endpoint hostname. Keep
+            # the bucket in the URL path rather than making it a subdomain.
+            config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
         )
 
     @classmethod

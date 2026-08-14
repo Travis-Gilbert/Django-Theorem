@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+from urllib.parse import urlparse
 from uuid import uuid4
 
 import pyarrow as pa
@@ -70,3 +71,22 @@ def test_artifact_store_rejects_cross_tenant_object_keys(store):
 
     with pytest.raises(ArtifactValidationError, match="admitted tenant prefix"):
         store.presign_get(other, owner_key)
+
+
+def test_presigned_urls_keep_the_bucket_in_the_path_for_neon_endpoints():
+    tenant_id = uuid4()
+    store = ArtifactStore(
+        endpoint_url="https://storage.example",
+        access_key_id="access",
+        secret_access_key="secret",
+        region="us-east-2",
+        bucket="theorem-artifacts",
+        presign_seconds=300,
+        max_bytes=1024 * 1024,
+    )
+    artifact_key = store.allocate_input_key(tenant_id)
+
+    url = urlparse(store.presign_put(tenant_id, artifact_key))
+
+    assert url.hostname == "storage.example"
+    assert url.path == f"/theorem-artifacts/{artifact_key}"
