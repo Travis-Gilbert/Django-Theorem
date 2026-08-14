@@ -121,9 +121,11 @@ def test_runpod_task_persists_remote_job_and_requires_arrow_descriptor(monkeypat
             return {
                 "status": "COMPLETED",
                 "output": {
-                    "schema_json": output_schema,
-                    "rows": output_table.num_rows,
-                    "payload_digest": output_digest,
+                    "output": {
+                        "schema_json": output_schema,
+                        "rows": output_table.num_rows,
+                        "payload_digest": output_digest,
+                    }
                 },
             }
 
@@ -210,9 +212,11 @@ def test_runpod_task_fails_when_output_readback_hits_storage_error(monkeypatch):
             return {
                 "status": "COMPLETED",
                 "output": {
-                    "schema_json": "{}",
-                    "rows": 1,
-                    "payload_digest": "sha256:" + "1" * 64,
+                    "output": {
+                        "schema_json": "{}",
+                        "rows": 1,
+                        "payload_digest": "sha256:" + "1" * 64,
+                    }
                 },
             }
 

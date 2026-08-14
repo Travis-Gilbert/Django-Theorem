@@ -265,6 +265,14 @@ def _output_descriptor(output: Any) -> tuple[str, int | None, str]:
     return schema_json, rows, payload_digest
 
 
+def _runpod_handler_output(result: Mapping[str, Any]) -> Any:
+    """Extract the handler payload from RunPod's asynchronous status envelope."""
+    envelope_output = result.get("output")
+    if not isinstance(envelope_output, Mapping):
+        raise ValueError("RunPod status output must contain a handler result object")
+    return envelope_output.get("output")
+
+
 def _post_provenance(job, *, engine: str, agent_name: str, code_ref: str) -> None:
     from bridges.rust_provenance import StubProvenanceClient
 
@@ -378,7 +386,7 @@ def _run_runpod_offload(job_id: str) -> dict[str, str]:
             log_prefix="RunPod",
         )
     try:
-        schema_json, rows, payload_digest = _output_descriptor(result.get("output"))
+        schema_json, rows, payload_digest = _output_descriptor(_runpod_handler_output(result))
         verified_output = store.read_arrow(
             job.tenant_id,
             output_artifact_key,
