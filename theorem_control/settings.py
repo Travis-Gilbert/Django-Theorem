@@ -68,9 +68,10 @@ TEMPLATES = [
 WSGI_APPLICATION = "theorem_control.wsgi.application"
 
 # ---------------------------------------------------------------------------
-# Database — PgBouncer transaction pooling (D10)
-# DISABLE_SERVER_SIDE_CURSORS + CONN_MAX_AGE=0 are mandatory under pooling.
-# Schema `control` is selected via search_path; spine is unreachable.
+# Database — direct Neon Postgres (D10)
+# CONN_MAX_AGE=0 avoids holding connections across requests. Schema `control`
+# is selected via a startup search_path option; Neon's pooler rejects that
+# option, so the deployed DATABASE_URL must target the direct endpoint.
 # ---------------------------------------------------------------------------
 _db_url = env("DATABASE_URL", default=f"sqlite:///{BASE_DIR / 'db.sqlite3'}")
 DATABASES = {"default": env.db_url_config(_db_url)}
@@ -110,7 +111,31 @@ WORKOS_WEBHOOK_SECRET = env("WORKOS_WEBHOOK_SECRET", default="test-webhook-secre
 STRIPE_API_KEY = env("STRIPE_API_KEY", default="")
 STRIPE_WEBHOOK_SECRET = env("STRIPE_WEBHOOK_SECRET", default="")
 
+# RunPod is an explicitly configured Serverless executor. Keeping the endpoint
+# identifier separate from the API key lets the same deployment route only the
+# intended Theorem worker image.
 RUNPOD_API_KEY = env("RUNPOD_API_KEY", default="")
+RUNPOD_SERVERLESS_ENDPOINT_ID = env("RUNPOD_SERVERLESS_ENDPOINT_ID", default="")
+RUNPOD_API_BASE = env("RUNPOD_API_BASE", default="https://api.runpod.ai/v2")
+RUNPOD_REQUEST_TIMEOUT_SECONDS = env.float("RUNPOD_REQUEST_TIMEOUT_SECONDS", default=30.0)
+RUNPOD_JOB_TIMEOUT_SECONDS = env.int("RUNPOD_JOB_TIMEOUT_SECONDS", default=900)
+RUNPOD_POLL_INTERVAL_SECONDS = env.float("RUNPOD_POLL_INTERVAL_SECONDS", default=5.0)
+# This is a provenance identifier, not a registry credential. It must be an
+# immutable image digest for the worker serving RUNPOD_SERVERLESS_ENDPOINT_ID.
+RUNPOD_WORKER_IMAGE_DIGEST = env("RUNPOD_WORKER_IMAGE_DIGEST", default="")
+OFFLOAD_EXECUTION_MODE = env("OFFLOAD_EXECUTION_MODE", default="stub").strip().lower()
+R_OFFLOAD_EXECUTION_MODE = env("R_OFFLOAD_EXECUTION_MODE", default="stub").strip().lower()
+RENV_LOCKFILE_PATH = env("RENV_LOCKFILE_PATH", default=str(BASE_DIR / "renv.lock"))
+
+# Neon Object Storage is S3-compatible. Only trusted Fly services receive
+# these credentials; RunPod receives operation-scoped presigned URLs instead.
+ARTIFACT_S3_ENDPOINT_URL = env("ARTIFACT_S3_ENDPOINT_URL", default="")
+ARTIFACT_S3_ACCESS_KEY_ID = env("ARTIFACT_S3_ACCESS_KEY_ID", default="")
+ARTIFACT_S3_SECRET_ACCESS_KEY = env("ARTIFACT_S3_SECRET_ACCESS_KEY", default="")
+ARTIFACT_S3_REGION = env("ARTIFACT_S3_REGION", default="")
+ARTIFACT_S3_BUCKET = env("ARTIFACT_S3_BUCKET", default="")
+ARTIFACT_PRESIGN_SECONDS = env.int("ARTIFACT_PRESIGN_SECONDS", default=900)
+ARTIFACT_MAX_BYTES = env.int("ARTIFACT_MAX_BYTES", default=64 * 1024 * 1024)
 
 THEOREM_API_BASE = env("THEOREM_API_BASE", default="http://127.0.0.1:8080")
 THEOREM_MACHINE_KEY = env("THEOREM_MACHINE_KEY", default="")

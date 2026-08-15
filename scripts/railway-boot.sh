@@ -1,9 +1,10 @@
 #!/bin/sh
 set -eu
 
-# Runtime traffic uses DATABASE_URL (PgBouncer). DDL/migrate needs a direct
-# Postgres URL when MIGRATE_DATABASE_URL is set — transaction pooling breaks
-# advisory locks and CREATE SCHEMA.
+# Runtime and migration traffic use direct Postgres URLs. Django sets the
+# isolated control schema through a startup search_path option, which Neon's
+# transaction pooler deliberately rejects; migrations also need a direct URL
+# for advisory locks and CREATE SCHEMA.
 APP_DATABASE_URL="${DATABASE_URL}"
 MIGRATE_URL="${MIGRATE_DATABASE_URL:-$DATABASE_URL}"
 

@@ -1,0 +1,7 @@
+# Image-only Fly application. `fly deploy --build-only --push` uploads the
+# Linux worker image to this private registry without creating a Machine,
+# service, volume, or public IP address.
+app = "travis-theorem-offload-worker"
+
+[build]
+  dockerfile = "Dockerfile"

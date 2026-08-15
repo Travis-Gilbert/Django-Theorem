@@ -1,0 +1,18 @@
+# Dedicated authenticated Valkey broker for Django-Theorem. There is no public
+# service declaration: Django reaches it only on Fly's private IPv6 network.
+app = "travis-django-theorem-valkey"
+primary_region = "iad"
+kill_signal = "SIGTERM"
+kill_timeout = "30s"
+
+[build]
+  dockerfile = "Dockerfile.valkey"
+
+[mounts]
+  source = "django_valkey_data"
+  destination = "/data"
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory = "256mb"

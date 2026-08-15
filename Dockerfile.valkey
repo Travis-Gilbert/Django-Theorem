@@ -1,0 +1,5 @@
+# Private Celery broker and control-plane cache. The password is injected by
+# Fly as VALKEY_PASSWORD; it is intentionally absent from this image and repo.
+FROM valkey/valkey:8-alpine
+
+CMD ["sh", "-c", "exec valkey-server --appendonly yes --dir /data --requirepass \"$VALKEY_PASSWORD\""]
