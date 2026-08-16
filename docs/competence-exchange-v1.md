@@ -67,3 +67,35 @@ python -m pytest -q tests/test_competence_live.py
 
 Without those credentials the test is skipped and must not be reported as live
 storage evidence.
+
+## Deployment topology and hosted oracle
+
+The Fly application runs three process groups from the same image:
+
+- `web` applies migrations and serves the authenticated HTTPS API;
+- `worker` consumes the default Celery queue and executes competence fits; and
+- `beat` schedules `sweep_competence_jobs`, which redispatches durable queued
+  jobs and recovers expired `running` leases.
+
+The hosted acceptance command must run inside the deployed environment so the
+object-storage credentials never leave Fly:
+
+```bash
+python manage.py competence_live_smoke \
+  --base-url https://travis-django-theorem-personal.fly.dev \
+  --timeout-seconds 120 \
+  --confirm-live-cleanup
+```
+
+It creates a disposable tenant, project, and machine key; calls the public
+HTTPS fit, status, and cleanup routes; reads both artifacts directly from the
+configured S3-compatible store; verifies byte length and SHA-256; replays
+cleanup; confirms both objects are unreadable; and removes the disposable
+database tenant. The confirmation flag is mandatory because the command
+deletes live test state.
+
+The command's boundary receipt has `evidence_class=live`: it proves deployed
+admission, Celery execution, object-store readback, and cleanup behavior. Its
+fit input is deliberately synthetic and is reported separately as
+`promotion_evidence_class=deterministic_fixture`. It must not be cited as
+real-world competence or promotion evidence.

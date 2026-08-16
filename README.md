@@ -157,6 +157,20 @@ deterministic wire fixture. The W14 known-truth suite exercises the real fitter
 with a byte-preserving local storage double; neither proves hosted object
 storage or deployment behavior.
 
+The complete wire, worker/Beat, evidence-class, and cleanup contract is in
+[`docs/competence-exchange-v1.md`](docs/competence-exchange-v1.md). Run the
+hosted boundary oracle inside the Fly web machine so credentials remain private:
+
+```bash
+python manage.py competence_live_smoke \
+  --base-url https://travis-django-theorem-personal.fly.dev \
+  --timeout-seconds 120 \
+  --confirm-live-cleanup
+```
+
+This proves the public deployed boundary and real artifact readback/cleanup.
+Its disposable scorer evidence remains a deterministic fixture and is not
+promotion evidence.
 
 ## RunPod and R execution contract
 
