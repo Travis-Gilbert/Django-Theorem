@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 from typing import Any, ClassVar, Literal, Self
 from uuid import UUID
@@ -11,7 +13,7 @@ from pydantic import ConfigDict, Field, model_validator
 
 COMPETENCE_EXCHANGE_SCHEMA = "theorem.competence.v1"
 COMPETENCE_EXCHANGE_FIXTURE_DIGEST = (
-    "sha256:2b6d4a1f23cd527170259f0c3ba0c0c9cae6ed2c009dead34786acef2344ba88"
+    "sha256:20b9ab00f143c5a26fc62b0a0016c19177abf1e6f152c91ebb6bb41a3903474c"
 )
 PromotionEvidenceClass = Literal[
     "deterministic_fixture", "local", "ci", "hosted", "live"
@@ -40,6 +42,23 @@ def is_sha256_address(value: str) -> bool:
     digest = value.removeprefix("sha256:")
     return len(digest) == 64 and all(
         character in "0123456789abcdef" for character in digest
+    )
+
+
+def canonical_hex_digest(value: Any) -> str:
+    payload = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def is_sha256_hex(value: str) -> bool:
+    return len(value) == 64 and all(
+        character in "0123456789abcdef" for character in value
     )
 
 
@@ -154,10 +173,12 @@ class PosteriorReceipt(StrictSchema):
 
     @model_validator(mode="after")
     def receipt_identity_is_content_addressed(self) -> Self:
+        payload = self.model_dump(mode="json", exclude={"receipt_hash"})
         if (
             not self.kind.strip()
             or not self.model_id.strip()
-            or not is_sha256_address(self.receipt_hash)
+            or not is_sha256_hex(self.receipt_hash)
+            or self.receipt_hash != canonical_hex_digest(payload)
         ):
             raise ValueError("posterior receipt identity is invalid")
         return self
