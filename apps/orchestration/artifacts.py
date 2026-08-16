@@ -169,6 +169,66 @@ class ArtifactStore:
         operation_hash = hashlib.sha256(operation_id.encode("utf-8")).hexdigest()
         return f"{self.tenant_prefix(tenant_id)}outputs/{operation_hash}.arrow"
 
+    @staticmethod
+    def _content_digest(value: str) -> str:
+        if not is_sha256_digest(value):
+            raise ArtifactValidationError("artifact identity must be a sha256 digest")
+        return value.removeprefix(SHA256_PREFIX)
+
+    def competence_artifact_key(
+        self,
+        tenant_id: UUID,
+        project_id: UUID,
+        candidate_id: str,
+        artifact_kind: str,
+        payload_digest: str,
+    ) -> str:
+        if not candidate_id.strip() or artifact_kind not in {"scorer_model", "prior_pack"}:
+            raise ArtifactValidationError("competence artifact scope is malformed")
+        candidate_hash = hashlib.sha256(candidate_id.encode("utf-8")).hexdigest()
+        digest = self._content_digest(payload_digest)
+        return (
+            f"{self.tenant_prefix(tenant_id)}projects/{project_id}/competence/"
+            f"{candidate_hash}/{artifact_kind}/{digest}"
+        )
+
+    def validate_competence_key(
+        self,
+        tenant_id: UUID,
+        project_id: UUID,
+        candidate_id: str,
+        artifact_key: str,
+    ) -> str:
+        key = self.validate_key(tenant_id, artifact_key)
+        candidate_hash = hashlib.sha256(candidate_id.encode("utf-8")).hexdigest()
+        prefix = (
+            f"{self.tenant_prefix(tenant_id)}projects/{project_id}/competence/"
+            f"{candidate_hash}/"
+        )
+        if not key.startswith(prefix):
+            raise ArtifactValidationError(
+                "artifact_key is outside the admitted competence project/candidate scope"
+            )
+        return key
+
+    def delete_competence_artifact(
+        self,
+        tenant_id: UUID,
+        project_id: UUID,
+        candidate_id: str,
+        artifact_key: str,
+    ) -> None:
+        key = self.validate_competence_key(
+            tenant_id,
+            project_id,
+            candidate_id,
+            artifact_key,
+        )
+        self._storage_call(
+            "delete",
+            lambda: self.client.delete_object(Bucket=self.bucket, Key=key),
+        )
+
     def presign_get(self, tenant_id: UUID, artifact_key: str) -> str:
         key = self.validate_key(tenant_id, artifact_key)
         return self._storage_call(

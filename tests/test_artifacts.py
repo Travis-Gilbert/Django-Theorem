@@ -31,6 +31,10 @@ class FakeS3Client:
         self.presigned.append((method, Params, ExpiresIn, HttpMethod))
         return f"https://storage.example/{Params['Key']}?method={method}"
 
+    def delete_object(self, *, Bucket, Key):
+        self.objects.pop((Bucket, Key), None)
+        return {}
+
 
 @pytest.fixture
 def store():
@@ -71,6 +75,27 @@ def test_artifact_store_rejects_cross_tenant_object_keys(store):
 
     with pytest.raises(ArtifactValidationError, match="admitted tenant prefix"):
         store.presign_get(other, owner_key)
+
+
+def test_competence_artifact_keys_are_content_addressed_and_exactly_scoped(store):
+    tenant_id, project_id = uuid4(), uuid4()
+    digest = "sha256:" + "a" * 64
+    key = store.competence_artifact_key(
+        tenant_id,
+        project_id,
+        "candidate:one",
+        "scorer_model",
+        digest,
+    )
+
+    assert key.endswith("/scorer_model/" + "a" * 64)
+    assert store.validate_competence_key(tenant_id, project_id, "candidate:one", key) == key
+    with pytest.raises(ArtifactValidationError, match="project/candidate scope"):
+        store.validate_competence_key(tenant_id, project_id, "candidate:two", key)
+    with pytest.raises(ArtifactValidationError, match="project/candidate scope"):
+        store.validate_competence_key(tenant_id, uuid4(), "candidate:one", key)
+
+    store.delete_competence_artifact(tenant_id, project_id, "candidate:one", key)
 
 
 def test_presigned_urls_keep_the_bucket_in_the_path_for_neon_endpoints():

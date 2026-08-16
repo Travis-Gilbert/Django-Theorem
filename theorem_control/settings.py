@@ -34,6 +34,7 @@ INSTALLED_APPS = [
     "apps.billing",
     "apps.keys",
     "apps.orchestration",
+    "apps.competence",
     "apps.observation",
     "apps.support",
 ]
