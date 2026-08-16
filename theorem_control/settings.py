@@ -34,6 +34,7 @@ INSTALLED_APPS = [
     "apps.billing",
     "apps.keys",
     "apps.orchestration",
+    "apps.competence",
     "apps.observation",
     "apps.support",
 ]
@@ -86,7 +87,9 @@ if DATABASES["default"].get("ENGINE", "").endswith("postgresql"):
     DATABASES["default"]["OPTIONS"]["options"] = f"{existing} {search}".strip()
 
 AUTH_PASSWORD_VALIDATORS = [
-    {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
+    {
+        "NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"
+    },
     {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
     {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
     {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
@@ -117,14 +120,18 @@ STRIPE_WEBHOOK_SECRET = env("STRIPE_WEBHOOK_SECRET", default="")
 RUNPOD_API_KEY = env("RUNPOD_API_KEY", default="")
 RUNPOD_SERVERLESS_ENDPOINT_ID = env("RUNPOD_SERVERLESS_ENDPOINT_ID", default="")
 RUNPOD_API_BASE = env("RUNPOD_API_BASE", default="https://api.runpod.ai/v2")
-RUNPOD_REQUEST_TIMEOUT_SECONDS = env.float("RUNPOD_REQUEST_TIMEOUT_SECONDS", default=30.0)
+RUNPOD_REQUEST_TIMEOUT_SECONDS = env.float(
+    "RUNPOD_REQUEST_TIMEOUT_SECONDS", default=30.0
+)
 RUNPOD_JOB_TIMEOUT_SECONDS = env.int("RUNPOD_JOB_TIMEOUT_SECONDS", default=900)
 RUNPOD_POLL_INTERVAL_SECONDS = env.float("RUNPOD_POLL_INTERVAL_SECONDS", default=5.0)
 # This is a provenance identifier, not a registry credential. It must be an
 # immutable image digest for the worker serving RUNPOD_SERVERLESS_ENDPOINT_ID.
 RUNPOD_WORKER_IMAGE_DIGEST = env("RUNPOD_WORKER_IMAGE_DIGEST", default="")
 OFFLOAD_EXECUTION_MODE = env("OFFLOAD_EXECUTION_MODE", default="stub").strip().lower()
-R_OFFLOAD_EXECUTION_MODE = env("R_OFFLOAD_EXECUTION_MODE", default="stub").strip().lower()
+R_OFFLOAD_EXECUTION_MODE = (
+    env("R_OFFLOAD_EXECUTION_MODE", default="stub").strip().lower()
+)
 RENV_LOCKFILE_PATH = env("RENV_LOCKFILE_PATH", default=str(BASE_DIR / "renv.lock"))
 
 # Neon Object Storage is S3-compatible. Only trusted Fly services receive
@@ -154,6 +161,19 @@ CELERY_TASK_ROUTES = {
     "apps.orchestration.tasks.run_offload_r": {"queue": "offload.r"},
 }
 CELERY_TASK_DEFAULT_QUEUE = "celery"
+COMPETENCE_STALE_AFTER_SECONDS = env.int(
+    "COMPETENCE_STALE_AFTER_SECONDS", default=15 * 60
+)
+COMPETENCE_SWEEP_BATCH_SIZE = env.int("COMPETENCE_SWEEP_BATCH_SIZE", default=100)
+COMPETENCE_SWEEP_INTERVAL_SECONDS = env.int(
+    "COMPETENCE_SWEEP_INTERVAL_SECONDS", default=60 * 60
+)
+CELERY_BEAT_SCHEDULE = {
+    "competence-sleep-cycle": {
+        "task": "apps.competence.tasks.sweep_competence_jobs",
+        "schedule": COMPETENCE_SWEEP_INTERVAL_SECONDS,
+    }
+}
 # R queue note: workers consuming `offload.r` must pin R + renv; agent name is "R".
 CELERY_R_QUEUE = "offload.r"
 CELERY_R_AGENT_NAME = "R"

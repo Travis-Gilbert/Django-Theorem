@@ -5,6 +5,10 @@ Django service for Theorem business/fleet management: tenancy, identity
 (WorkOS shadow rows), billing, machine API keys, offload orchestration,
 feature flags, and support notes.
 
+It also owns the authenticated `theorem.competence.v1` fit/refit job boundary.
+The competence worker fits selection-corrected Beta-Bernoulli scorers, publishes
+content-addressed prior/model artifacts, and exposes inspectable recovery state.
+
 ## Stack
 
 - Django 5.x + django-ninja
@@ -30,6 +34,12 @@ Celery worker (default queue):
 
 ```bash
 celery -A theorem_control worker -l info
+```
+
+Celery beat (competence sleep-cycle recovery/refit dispatch):
+
+```bash
+celery -A theorem_control beat -l info
 ```
 
 R queue worker (separate image with pinned R + renv + rpy2):
@@ -71,6 +81,9 @@ preflight as the Fly R worker before starting Celery.
 | `DISABLE_SERVER_SIDE_CURSORS` | Must be `True` under PgBouncer transaction pooling |
 | `CONN_MAX_AGE` | Must be `0` under PgBouncer |
 | `CELERY_TASK_ALWAYS_EAGER` | Run tasks inline (tests / local) |
+| `COMPETENCE_STALE_AFTER_SECONDS` | Age after which a running competence job is recoverable (default 900) |
+| `COMPETENCE_SWEEP_BATCH_SIZE` | Maximum queued competence jobs dispatched per sleep cycle (default 100) |
+| `COMPETENCE_SWEEP_INTERVAL_SECONDS` | Celery beat interval for competence recovery (default 3600) |
 
 ## Postgres schemas / roles
 
@@ -99,6 +112,10 @@ Django sets `search_path=control,public`. Settings force
 - `POST /internal/offload/artifact-upload` — mint a tenant-scoped, short-lived Arrow upload URL
 - `GET /internal/offload/{job_id}` — return the caller tenant's job status + ArrowBatch descriptor
 - `POST /internal/offload/{job_id}/cancel` — cancel the caller tenant's job
+- `POST /internal/competence/fit` — submit a tenant/project-bound competence fit
+- `POST /internal/competence/refit` — submit a refit bound to a previous scorer
+- `GET /internal/competence/jobs/{job_id}` — inspect fit/refit state and artifacts
+- `POST /internal/competence/jobs/{job_id}/cleanup` — remove exact owned artifacts
 - `/admin/` — ops console (revoke key, re-run job, reset usage, impersonate grant)
 - `GET /healthz`
 
@@ -117,6 +134,43 @@ never submit a `tenant_id`. Grant only the scopes required by the caller:
 `offload:*` grants all three offload scopes. Revoked, expired, inactive-tenant,
 or unknown keys are refused; job lookups are filtered to the admitted tenant.
 
+### Competence machine-key admission
+
+The competence routes use `competence:fit`, `competence:read`, and
+`competence:cleanup`; `competence:*` grants all three. Each request carries the
+tenant UUID as part of its content-addressed scope, but that value never selects
+authority: it must equal the tenant derived from the verified machine key.
+
+`theorem.competence.v1` carries lineage-de-duplicated sufficient evidence and
+content-addressed scorer/prior references, not raw graph state or authority.
+Exact operation retries reuse one job. Reusing the key with a changed payload
+fails closed. Cleanup is restricted to the artifacts persisted for the exact
+tenant, project, candidate, and job.
+
+The worker uses training survival to establish a Beta prior and W02-corrected
+held-out outcomes for the posterior. Fit/refit output is immutable: exact retry
+reuses the job, refit binds the prior scorer and rejects reused lineage, and a
+status cannot become `succeeded` until both artifacts pass readback.
+
+The fixture at `contracts/theorem.competence.v1.fixture.json` is explicitly a
+deterministic wire fixture. The W14 known-truth suite exercises the real fitter
+with a byte-preserving local storage double; neither proves hosted object
+storage or deployment behavior.
+
+The complete wire, worker/Beat, evidence-class, and cleanup contract is in
+[`docs/competence-exchange-v1.md`](docs/competence-exchange-v1.md). Run the
+hosted boundary oracle inside the Fly web machine so credentials remain private:
+
+```bash
+python manage.py competence_live_smoke \
+  --base-url https://travis-django-theorem-personal.fly.dev \
+  --timeout-seconds 120 \
+  --confirm-live-cleanup
+```
+
+This proves the public deployed boundary and real artifact readback/cleanup.
+Its disposable scorer evidence remains a deterministic fixture and is not
+promotion evidence.
 
 ## RunPod and R execution contract
 

@@ -17,6 +17,10 @@ OFFLOAD_INVOKE_SCOPE = "offload:invoke"
 OFFLOAD_READ_SCOPE = "offload:read"
 OFFLOAD_CANCEL_SCOPE = "offload:cancel"
 OFFLOAD_WILDCARD_SCOPE = "offload:*"
+COMPETENCE_FIT_SCOPE = "competence:fit"
+COMPETENCE_READ_SCOPE = "competence:read"
+COMPETENCE_CLEANUP_SCOPE = "competence:cleanup"
+COMPETENCE_WILDCARD_SCOPE = "competence:*"
 
 
 @dataclass(frozen=True)
@@ -44,6 +48,10 @@ def _scope_allows(scopes: object, required_scope: str) -> bool:
         "*" in granted
         or required_scope in granted
         or (required_scope.startswith("offload:") and OFFLOAD_WILDCARD_SCOPE in granted)
+        or (
+            required_scope.startswith("competence:")
+            and COMPETENCE_WILDCARD_SCOPE in granted
+        )
     )
 
 
