@@ -19,7 +19,7 @@ The canonical fixture is
 [`contracts/theorem.competence.v1.fixture.json`](../contracts/theorem.competence.v1.fixture.json).
 Both Rust and Python parse it with unknown fields denied.
 Its canonical cross-repository digest is
-`sha256:2b6d4a1f23cd527170259f0c3ba0c0c9cae6ed2c009dead34786acef2344ba88`.
+`sha256:20b9ab00f143c5a26fc62b0a0016c19177abf1e6f152c91ebb6bb41a3903474c`.
 
 ## Authority
 
@@ -38,9 +38,32 @@ storage credentials, and promotion authority do not cross this boundary.
 Model and prior outputs are content-addressed descriptors. Storage keys remain
 server-side so cleanup can enforce the exact tenant/project/candidate prefix.
 
-## W13 versus W14
+## Fit and refit execution
 
-W13 accepts valid work into a durable `queued` state but does not fit anything.
-The deterministic scorer in the fixture is a contract oracle only. W14 must add
-the live fitter and prove known-truth recovery, isolation, model versioning, and
-provider artifact behavior before a live result can be claimed.
+The API commits a durable `queued` job before dispatching the Celery task. The
+default worker fits a Beta-Bernoulli scorer from sufficient evidence only:
+training survival initializes the prior and held-out outcomes update the
+posterior with W02 importance weights. Refit starts from the exact previous
+posterior, requires the same package/candidate scope, and refuses any causal
+lineage already consumed by that scorer.
+
+Prior-pack and scorer-model JSON bytes are canonicalized, hashed, written under
+the exact tenant/project/candidate prefix, and read back before the database can
+publish `succeeded`. A periodic `sweep_competence_jobs` task re-dispatches queued
+work and recovers abandoned `running` leases. It does not reinterpret failed or
+refused work as complete.
+
+The deterministic scorer in the shared fixture remains a W13 contract oracle.
+W14 known-truth tests exercise the real fitter and a byte-preserving local
+object-store double; they do not claim hosted Neon S3 or deployed Celery proof.
+Those stronger evidence classes remain explicit deployment gates.
+
+Run the provider artifact oracle with the five `ARTIFACT_S3_*` credentials in
+the environment:
+
+```bash
+python -m pytest -q tests/test_competence_live.py
+```
+
+Without those credentials the test is skipped and must not be reported as live
+storage evidence.

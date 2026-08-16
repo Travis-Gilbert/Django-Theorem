@@ -39,6 +39,14 @@ class StoredArrowArtifact:
     rows: int
 
 
+@dataclass(frozen=True)
+class StoredContentArtifact:
+    artifact_key: str
+    payload_digest: str
+    media_type: str
+    byte_length: int
+
+
 def sha256_digest(payload: bytes) -> str:
     return f"{SHA256_PREFIX}{hashlib.sha256(payload).hexdigest()}"
 
@@ -47,7 +55,9 @@ def is_sha256_digest(value: str) -> bool:
     if not isinstance(value, str) or not value.startswith(SHA256_PREFIX):
         return False
     digest = value.removeprefix(SHA256_PREFIX)
-    return len(digest) == 64 and all(character in "0123456789abcdef" for character in digest)
+    return len(digest) == 64 and all(
+        character in "0123456789abcdef" for character in digest
+    )
 
 
 def arrow_schema_json(schema: pa.Schema) -> str:
@@ -84,7 +94,9 @@ def decode_arrow_ipc(payload: bytes) -> pa.Table:
     try:
         return pa.ipc.open_stream(pa.py_buffer(payload)).read_all()
     except (pa.ArrowException, ValueError, OSError) as exc:
-        raise ArtifactValidationError("artifact is not a valid Arrow IPC stream") from exc
+        raise ArtifactValidationError(
+            "artifact is not a valid Arrow IPC stream"
+        ) from exc
 
 
 class ArtifactStore:
@@ -113,7 +125,9 @@ class ArtifactStore:
         if missing:
             raise ArtifactConfigurationError(f"missing {', '.join(missing)}")
         if presign_seconds <= 0 or max_bytes <= 0:
-            raise ArtifactConfigurationError("artifact expiry and maximum bytes must be positive")
+            raise ArtifactConfigurationError(
+                "artifact expiry and maximum bytes must be positive"
+            )
 
         self.bucket = bucket
         self.presign_seconds = presign_seconds
@@ -148,10 +162,16 @@ class ArtifactStore:
     def validate_key(self, tenant_id: UUID, artifact_key: str) -> str:
         if not isinstance(artifact_key, str) or not artifact_key:
             raise ArtifactValidationError("artifact_key is required")
-        if len(artifact_key) > 512 or "\\" in artifact_key or ".." in artifact_key.split("/"):
+        if (
+            len(artifact_key) > 512
+            or "\\" in artifact_key
+            or ".." in artifact_key.split("/")
+        ):
             raise ArtifactValidationError("artifact_key is malformed")
         if not artifact_key.startswith(self.tenant_prefix(tenant_id)):
-            raise ArtifactValidationError("artifact_key is outside the admitted tenant prefix")
+            raise ArtifactValidationError(
+                "artifact_key is outside the admitted tenant prefix"
+            )
         return artifact_key
 
     @staticmethod
@@ -183,7 +203,10 @@ class ArtifactStore:
         artifact_kind: str,
         payload_digest: str,
     ) -> str:
-        if not candidate_id.strip() or artifact_kind not in {"scorer_model", "prior_pack"}:
+        if not candidate_id.strip() or artifact_kind not in {
+            "scorer_model",
+            "prior_pack",
+        }:
             raise ArtifactValidationError("competence artifact scope is malformed")
         candidate_hash = hashlib.sha256(candidate_id.encode("utf-8")).hexdigest()
         digest = self._content_digest(payload_digest)
@@ -210,6 +233,56 @@ class ArtifactStore:
                 "artifact_key is outside the admitted competence project/candidate scope"
             )
         return key
+
+    def write_competence_artifact(
+        self,
+        tenant_id: UUID,
+        project_id: UUID,
+        candidate_id: str,
+        artifact_kind: str,
+        payload: bytes,
+        media_type: str,
+    ) -> StoredContentArtifact:
+        expected_media_types = {
+            "scorer_model": "application/vnd.theorem.competence-scorer+json",
+            "prior_pack": "application/vnd.theorem.prior-pack+json",
+        }
+        if expected_media_types.get(artifact_kind) != media_type:
+            raise ArtifactValidationError(
+                "competence artifact kind and media type do not match"
+            )
+        if not payload or len(payload) > self.max_bytes:
+            raise ArtifactValidationError(
+                "competence artifact must be non-empty and within ARTIFACT_MAX_BYTES"
+            )
+        payload_digest = sha256_digest(payload)
+        key = self.competence_artifact_key(
+            tenant_id,
+            project_id,
+            candidate_id,
+            artifact_kind,
+            payload_digest,
+        )
+        self._storage_call(
+            "write competence artifact",
+            lambda: self.client.put_object(
+                Bucket=self.bucket,
+                Key=key,
+                Body=payload,
+                ContentType=media_type,
+            ),
+        )
+        recovered = self.get_bytes(tenant_id, key)
+        if recovered != payload:
+            raise ArtifactValidationError(
+                "competence artifact readback does not match published bytes"
+            )
+        return StoredContentArtifact(
+            artifact_key=key,
+            payload_digest=payload_digest,
+            media_type=media_type,
+            byte_length=len(payload),
+        )
 
     def delete_competence_artifact(
         self,
@@ -247,7 +320,11 @@ class ArtifactStore:
             "presign PUT",
             lambda: self.client.generate_presigned_url(
                 "put_object",
-                Params={"Bucket": self.bucket, "Key": key, "ContentType": ARROW_IPC_CONTENT_TYPE},
+                Params={
+                    "Bucket": self.bucket,
+                    "Key": key,
+                    "ContentType": ARROW_IPC_CONTENT_TYPE,
+                },
                 ExpiresIn=self.presign_seconds,
                 HttpMethod="PUT",
             ),
@@ -280,13 +357,19 @@ class ArtifactStore:
         payload = self.get_bytes(tenant_id, artifact_key)
         actual_digest = sha256_digest(payload)
         if expected_digest and actual_digest != expected_digest:
-            raise ArtifactValidationError("artifact payload digest does not match the descriptor")
+            raise ArtifactValidationError(
+                "artifact payload digest does not match the descriptor"
+            )
         table = decode_arrow_ipc(payload)
         schema_json = arrow_schema_json(table.schema)
         if expected_schema_json and schema_json != expected_schema_json:
-            raise ArtifactValidationError("artifact schema does not match the descriptor")
+            raise ArtifactValidationError(
+                "artifact schema does not match the descriptor"
+            )
         if expected_rows is not None and table.num_rows != expected_rows:
-            raise ArtifactValidationError("artifact row count does not match the descriptor")
+            raise ArtifactValidationError(
+                "artifact row count does not match the descriptor"
+            )
         return StoredArrowArtifact(
             artifact_key=artifact_key,
             payload_digest=actual_digest,
@@ -306,16 +389,24 @@ class ArtifactStore:
         payload = self.get_bytes(tenant_id, artifact_key)
         actual_digest = sha256_digest(payload)
         if expected_digest and actual_digest != expected_digest:
-            raise ArtifactValidationError("artifact payload digest does not match the descriptor")
+            raise ArtifactValidationError(
+                "artifact payload digest does not match the descriptor"
+            )
         table = decode_arrow_ipc(payload)
         schema_json = arrow_schema_json(table.schema)
         if expected_schema_json and schema_json != expected_schema_json:
-            raise ArtifactValidationError("artifact schema does not match the descriptor")
+            raise ArtifactValidationError(
+                "artifact schema does not match the descriptor"
+            )
         if expected_rows is not None and table.num_rows != expected_rows:
-            raise ArtifactValidationError("artifact row count does not match the descriptor")
+            raise ArtifactValidationError(
+                "artifact row count does not match the descriptor"
+            )
         return table
 
-    def write_table(self, tenant_id: UUID, artifact_key: str, table: pa.Table) -> StoredArrowArtifact:
+    def write_table(
+        self, tenant_id: UUID, artifact_key: str, table: pa.Table
+    ) -> StoredArrowArtifact:
         key = self.validate_key(tenant_id, artifact_key)
         payload = encode_arrow_ipc(table)
         if len(payload) > self.max_bytes:

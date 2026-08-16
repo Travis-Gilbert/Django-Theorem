@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 from typing import Any
 from uuid import UUID
@@ -26,6 +27,7 @@ from apps.competence.contract import (
     CompetenceSubmissionReceipt,
 )
 from apps.competence.models import CompetenceJob
+from apps.competence.tasks import run_competence_fit
 from apps.keys.auth import (
     COMPETENCE_CLEANUP_SCOPE,
     COMPETENCE_FIT_SCOPE,
@@ -42,6 +44,7 @@ from apps.orchestration.artifacts import (
 from apps.tenancy.models import Project, Tenant
 
 router = Router(tags=["competence"])
+logger = logging.getLogger(__name__)
 CONTRACT_RESPONSES = {
     202: CompetenceSubmissionReceipt,
     400: CompetenceRefusal,
@@ -181,9 +184,12 @@ def _validate_fit_request(
             ]
             if (
                 not selection.decision_ref.strip()
-                or selection.behavior_probability <= 0.0
-                or selection.target_probability < 0.0
+                or not 0.0 < selection.behavior_probability <= 1.0
+                or not 0.0 <= selection.target_probability <= 1.0
                 or not all(math.isfinite(value) for value in finite)
+                or selection.importance_weight < 0.0
+                or not 0.0 <= selection.observed_outcome <= 1.0
+                or not 0.0 <= selection.weighted_outcome <= selection.importance_weight
                 or not math.isclose(
                     selection.importance_weight,
                     selection.target_probability / selection.behavior_probability,
@@ -227,6 +233,14 @@ def _submission(job: CompetenceJob, *, reused: bool) -> CompetenceSubmissionRece
         status=job.status,
         reused=reused,
     )
+
+
+def _dispatch_competence_job(job_id: str) -> None:
+    try:
+        run_competence_fit.delay(job_id)
+    # A broker outage leaves the durable queued job for the sleep-cycle sweep.
+    except Exception:  # pragma: no cover
+        logger.exception("competence job %s could not be dispatched", job_id)
 
 
 def _submit(
@@ -284,7 +298,7 @@ def _submit(
             request_json=payload,
             status=CompetenceJob.Status.QUEUED,
         )
-    # W13 intentionally does not dispatch a fitter. W14 owns the live worker.
+        transaction.on_commit(lambda: _dispatch_competence_job(str(job.id)))
     return 202, _submission(job, reused=False)
 
 

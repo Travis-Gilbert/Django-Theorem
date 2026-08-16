@@ -42,6 +42,8 @@ class CompetenceJob(models.Model):
     status = models.CharField(
         max_length=32, choices=Status.choices, default=Status.QUEUED
     )
+    celery_task_id = models.CharField(max_length=255, blank=True, default="")
+    attempt_count = models.PositiveIntegerField(default=0)
     scorer_json = models.JSONField(default=dict, blank=True)
     refusal_json = models.JSONField(default=dict, blank=True)
     artifact_keys_json = models.JSONField(default=dict, blank=True)

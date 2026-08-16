@@ -6,8 +6,8 @@ Django service for Theorem business/fleet management: tenancy, identity
 feature flags, and support notes.
 
 It also owns the authenticated `theorem.competence.v1` fit/refit job boundary.
-The W13 implementation records inspectable queued work and strict contract
-fixtures; live model fitting is a separate W14 service gate.
+The competence worker fits selection-corrected Beta-Bernoulli scorers, publishes
+content-addressed prior/model artifacts, and exposes inspectable recovery state.
 
 ## Stack
 
@@ -34,6 +34,12 @@ Celery worker (default queue):
 
 ```bash
 celery -A theorem_control worker -l info
+```
+
+Celery beat (competence sleep-cycle recovery/refit dispatch):
+
+```bash
+celery -A theorem_control beat -l info
 ```
 
 R queue worker (separate image with pinned R + renv + rpy2):
@@ -75,6 +81,9 @@ preflight as the Fly R worker before starting Celery.
 | `DISABLE_SERVER_SIDE_CURSORS` | Must be `True` under PgBouncer transaction pooling |
 | `CONN_MAX_AGE` | Must be `0` under PgBouncer |
 | `CELERY_TASK_ALWAYS_EAGER` | Run tasks inline (tests / local) |
+| `COMPETENCE_STALE_AFTER_SECONDS` | Age after which a running competence job is recoverable (default 900) |
+| `COMPETENCE_SWEEP_BATCH_SIZE` | Maximum queued competence jobs dispatched per sleep cycle (default 100) |
+| `COMPETENCE_SWEEP_INTERVAL_SECONDS` | Celery beat interval for competence recovery (default 3600) |
 
 ## Postgres schemas / roles
 
@@ -138,9 +147,15 @@ Exact operation retries reuse one job. Reusing the key with a changed payload
 fails closed. Cleanup is restricted to the artifacts persisted for the exact
 tenant, project, candidate, and job.
 
+The worker uses training survival to establish a Beta prior and W02-corrected
+held-out outcomes for the posterior. Fit/refit output is immutable: exact retry
+reuses the job, refit binds the prior scorer and rejects reused lineage, and a
+status cannot become `succeeded` until both artifacts pass readback.
+
 The fixture at `contracts/theorem.competence.v1.fixture.json` is explicitly a
-deterministic wire fixture. It cannot establish that the W14 fitter, object
-storage, or a deployed provider behaves correctly.
+deterministic wire fixture. The W14 known-truth suite exercises the real fitter
+with a byte-preserving local storage double; neither proves hosted object
+storage or deployment behavior.
 
 
 ## RunPod and R execution contract

@@ -13,3 +13,4 @@ restartPolicyMaxRetries = 5
 # using the same image with overridden start commands, e.g.:
 #   celery -A theorem_control worker -l info
 #   celery -A theorem_control worker -l info -Q offload.r
+#   celery -A theorem_control beat -l info

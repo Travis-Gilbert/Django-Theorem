@@ -11,6 +11,7 @@ from apps.orchestration.artifacts import (
     ArtifactStore,
     ArtifactValidationError,
     arrow_schema_json,
+    sha256_digest,
 )
 
 
@@ -18,10 +19,11 @@ class FakeS3Client:
     def __init__(self):
         self.objects = {}
         self.presigned = []
+        self.content_types = {}
 
     def put_object(self, *, Bucket, Key, Body, ContentType):
         self.objects[(Bucket, Key)] = bytes(Body)
-        assert ContentType == "application/vnd.apache.arrow.stream"
+        self.content_types[(Bucket, Key)] = ContentType
 
     def get_object(self, *, Bucket, Key):
         payload = self.objects[(Bucket, Key)]
@@ -65,7 +67,9 @@ def test_artifacts_are_tenant_scoped_and_round_trip_as_arrow(store):
     )
 
     assert recovered == written
-    assert store.presign_get(tenant_id, artifact_key).startswith("https://storage.example/")
+    assert store.presign_get(tenant_id, artifact_key).startswith(
+        "https://storage.example/"
+    )
     assert store.presign_put(tenant_id, artifact_key).endswith("method=put_object")
 
 
@@ -89,13 +93,37 @@ def test_competence_artifact_keys_are_content_addressed_and_exactly_scoped(store
     )
 
     assert key.endswith("/scorer_model/" + "a" * 64)
-    assert store.validate_competence_key(tenant_id, project_id, "candidate:one", key) == key
+    assert (
+        store.validate_competence_key(tenant_id, project_id, "candidate:one", key)
+        == key
+    )
     with pytest.raises(ArtifactValidationError, match="project/candidate scope"):
         store.validate_competence_key(tenant_id, project_id, "candidate:two", key)
     with pytest.raises(ArtifactValidationError, match="project/candidate scope"):
         store.validate_competence_key(tenant_id, uuid4(), "candidate:one", key)
 
     store.delete_competence_artifact(tenant_id, project_id, "candidate:one", key)
+
+
+def test_competence_artifacts_are_written_read_back_and_content_addressed(store):
+    tenant_id, project_id = uuid4(), uuid4()
+    payload = b'{"schema":"theorem.competence-scorer.v1"}'
+    stored = store.write_competence_artifact(
+        tenant_id,
+        project_id,
+        "candidate:one",
+        "scorer_model",
+        payload,
+        "application/vnd.theorem.competence-scorer+json",
+    )
+
+    assert stored.payload_digest == sha256_digest(payload)
+    assert stored.byte_length == len(payload)
+    assert store.get_bytes(tenant_id, stored.artifact_key) == payload
+    assert (
+        store.client.content_types[(store.bucket, stored.artifact_key)]
+        == "application/vnd.theorem.competence-scorer+json"
+    )
 
 
 def test_presigned_urls_keep_the_bucket_in_the_path_for_neon_endpoints():

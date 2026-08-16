@@ -40,7 +40,7 @@ def contract_fixture():
 
 
 @pytest.fixture
-def competence_client(db, contract_fixture):
+def competence_client(db, contract_fixture, monkeypatch):
     scope = contract_fixture["fit_request"]["scope"]
     tenant = Tenant.objects.create(
         id=UUID(scope["tenant_id"]),
@@ -57,6 +57,10 @@ def competence_client(db, contract_fixture):
     client = Client(HTTP_AUTHORIZATION=f"Bearer {minted.plaintext}")
     client.tenant = tenant
     client.project = project
+    monkeypatch.setattr(
+        "apps.competence.api.run_competence_fit.delay",
+        lambda _job_id: None,
+    )
     return client
 
 
@@ -397,4 +401,12 @@ def test_duplicate_lineage_and_raw_authority_fields_are_refused(
     not_live = post_json(competence_client, "/internal/competence/fit", false_live)
     assert not_live.status_code == 422
     assert not_live.json()["code"] == "live_oracle_mismatch"
+
+    out_of_range = copy.deepcopy(contract_fixture["fit_request"])
+    out_of_range["evidence"][1]["selection"]["observed_outcome"] = 1.1
+    invalid_probability = post_json(
+        competence_client, "/internal/competence/fit", out_of_range
+    )
+    assert invalid_probability.status_code == 422
+    assert invalid_probability.json()["code"] == "invalid_selection_evidence"
     assert CompetenceJob.objects.count() == 0
