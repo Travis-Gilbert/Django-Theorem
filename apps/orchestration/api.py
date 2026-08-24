@@ -19,6 +19,7 @@ from apps.keys.auth import (
     require_machine_key,
 )
 from apps.orchestration.artifacts import (
+    ARROW_IPC_CONTENT_TYPE,
     ArtifactConfigurationError,
     ArtifactStore,
     ArtifactStorageError,
@@ -77,6 +78,9 @@ class ArtifactUploadResponse(Schema):
     artifact_key: str
     upload_url: str
     expires_in_seconds: int
+    required_headers: dict[str, str] = Field(
+        default_factory=lambda: {"Content-Type": ARROW_IPC_CONTENT_TYPE}
+    )
 
 
 class JobStatusResponse(Schema):

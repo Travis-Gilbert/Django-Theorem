@@ -226,6 +226,8 @@ def _runpod_input(job, *, store: ArtifactStore, output_artifact_key: str) -> dic
             "write_url": store.presign_put(job.tenant_id, output_artifact_key),
         },
         "params": job.kwargs_json.get("params") or {},
+        # Pass artifact max bytes to worker to keep limits consistent (P2: Keep artifact limits consistent)
+        "max_bytes": store.max_bytes,
     }
 
 
@@ -270,6 +272,10 @@ def _runpod_handler_output(result: Mapping[str, Any]) -> Any:
     envelope_output = result.get("output")
     if not isinstance(envelope_output, Mapping):
         raise ValueError("RunPod status output must contain a handler result object")
+    # Preserve explicit handler errors (P2: Preserve explicit RunPod handler errors)
+    handler_error = envelope_output.get("error")
+    if handler_error:
+        raise ValueError(f"RunPod handler error: {handler_error}")
     return envelope_output.get("output")
 
 
@@ -342,6 +348,11 @@ def _run_runpod_offload(job_id: str) -> dict[str, str]:
 
         def persist_status(state: Mapping[str, Any]) -> None:
             nonlocal last_logs_hash, last_status
+            # Check for cancellation during polling (P1: Observe cancellation while polling RunPod)
+            job.refresh_from_db()
+            if job.status == Job.Status.CANCELED:
+                raise RunpodTimeoutError("Job was cancelled during execution")
+            
             status = str(state["status"])
             changed = False
             if status != last_status:
@@ -377,7 +388,13 @@ def _run_runpod_offload(job_id: str) -> dict[str, str]:
         RunpodConfigurationError,
         RunpodTimeoutError,
     ) as exc:
-        return _fail_job(job_id, str(exc), log_prefix="RunPod")
+        error_msg = str(exc)
+        # If job was cancelled, return canceled status instead of failing
+        if "Job was cancelled during execution" in error_msg:
+            job.refresh_from_db()
+            if job.status == Job.Status.CANCELED:
+                return {"status": "canceled"}
+        return _fail_job(job_id, error_msg, log_prefix="RunPod")
 
     if result["status"] != RunpodServerlessClient.SUCCESS:
         return _fail_job(
@@ -510,11 +527,19 @@ def _run_r_offload(job_id: str) -> dict[str, str]:
     job.ended_at = dj_timezone.now()
     _append_log(job, f"[R] completed survey_weight ({identity})")
     job.save()
+    # Include both R environment and Python runner code in provenance (P1: Include R runner code in provenance)
+    # For rpy2 mode, we use a composite code_ref that includes both the renv lockfile
+    # and a hash of this module to ensure provenance tracks both the R environment
+    # and the Python runner code
+    import inspect
+    module_source = inspect.getsource(_run_r_offload)
+    module_hash = hashlib.sha256(module_source.encode()).hexdigest()
+    composite_code_ref = hashlib.sha256(f"{lockfile_hash}:{module_hash}".encode()).hexdigest()
     _post_provenance(
         job,
         engine="rpy2",
         agent_name="R",
-        code_ref=lockfile_hash,
+        code_ref=composite_code_ref,
     )
     return {
         "status": "succeeded",

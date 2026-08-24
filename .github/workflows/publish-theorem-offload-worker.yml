@@ -3,6 +3,7 @@ name: Publish Theorem offload worker
 on:
   push:
     branches:
+      - main
       - codex/fly-neon-control-plane
     paths:
       - runpod/theorem_offload_contract_worker/**

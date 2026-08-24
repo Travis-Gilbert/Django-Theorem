@@ -11,6 +11,7 @@ unimplemented computation from becoming a forged provenance success.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from collections.abc import Mapping
 from typing import Any
@@ -28,7 +29,8 @@ SUPPORTED_OPERATIONS = frozenset(
         "data_science.community.assign",
     }
 )
-MAX_ARTIFACT_BYTES = 64 * 1024 * 1024
+# Keep artifact limits consistent with Django control plane (P2: Keep artifact limits consistent)
+MAX_ARTIFACT_BYTES = int(os.environ.get("ARTIFACT_MAX_BYTES", 64 * 1024 * 1024))
 ARROW_IPC_CONTENT_TYPE = "application/vnd.apache.arrow.stream"
 
 
@@ -81,16 +83,16 @@ def _decode_arrow(payload: bytes) -> pa.Table:
         raise ValueError("input artifact is not a valid Arrow IPC stream") from exc
 
 
-def _download(url: str) -> bytes:
+def _download(url: str, max_bytes: int = MAX_ARTIFACT_BYTES) -> bytes:
     with urlopen(url, timeout=60) as response:  # noqa: S310 - URL is a signed capability from Django.
-        payload = response.read(MAX_ARTIFACT_BYTES + 1)
-    if len(payload) > MAX_ARTIFACT_BYTES:
+        payload = response.read(max_bytes + 1)
+    if len(payload) > max_bytes:
         raise ValueError("input artifact exceeds the worker maximum")
     return payload
 
 
-def _upload(url: str, payload: bytes) -> None:
-    if len(payload) > MAX_ARTIFACT_BYTES:
+def _upload(url: str, payload: bytes, max_bytes: int = MAX_ARTIFACT_BYTES) -> None:
+    if len(payload) > max_bytes:
         raise ValueError("output artifact exceeds the worker maximum")
     request = Request(
         url,
@@ -185,6 +187,10 @@ def validate_input(value: Any) -> str | None:
         return "output.write_url must be an HTTPS signed URL"
     if not isinstance(value.get("params"), Mapping):
         return "params must be an object"
+    # Validate max_bytes if provided
+    max_bytes = value.get("max_bytes")
+    if max_bytes is not None and (not isinstance(max_bytes, int) or isinstance(max_bytes, bool) or max_bytes <= 0):
+        return "max_bytes must be a positive integer"
     return None
 
 
@@ -200,6 +206,8 @@ def handler(job: dict[str, Any]) -> dict[str, Any]:
     assert isinstance(descriptor, Mapping)
     assert isinstance(output, Mapping)
     operation = request["operation"]
+    # Use max_bytes from request if provided, otherwise fall back to env/default
+    max_bytes = request.get("max_bytes", MAX_ARTIFACT_BYTES)
     if operation != "data_science.community.assign":
         return {
             "error": (
@@ -208,7 +216,7 @@ def handler(job: dict[str, Any]) -> dict[str, Any]:
             )
         }
     try:
-        input_payload = _download(str(descriptor["read_url"]))
+        input_payload = _download(str(descriptor["read_url"]), max_bytes=max_bytes)
         if _sha256_digest(input_payload) != descriptor["payload_digest"]:
             raise ValueError("input artifact digest does not match the descriptor")
         input_table = _decode_arrow(input_payload)
@@ -218,7 +226,7 @@ def handler(job: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("input artifact row count does not match the descriptor")
         output_table = _community_assign(input_table)
         output_payload = _encode_arrow(output_table)
-        _upload(str(output["write_url"]), output_payload)
+        _upload(str(output["write_url"]), output_payload, max_bytes=max_bytes)
     except (OSError, ValueError) as exc:
         return {"error": f"{CONTRACT} execution failed: {exc}"}
     return {
