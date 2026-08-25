@@ -126,6 +126,30 @@ def test_competence_artifacts_are_written_read_back_and_content_addressed(store)
     )
 
 
+@pytest.mark.parametrize(
+    "payload,media_type,extension",
+    [
+        (b"\x89PNG\r\n\x1a\nfixture", "image/png", "png"),
+        (b'<svg xmlns="http://www.w3.org/2000/svg"></svg>', "image/svg+xml", "svg"),
+    ],
+)
+def test_render_artifacts_are_content_addressed_and_read_back(
+    store, payload, media_type, extension
+):
+    tenant_id = uuid4()
+    stored = store.write_render_artifact(
+        tenant_id,
+        payload,
+        media_type=media_type,
+    )
+
+    digest_hex = sha256_digest(payload).removeprefix("sha256:")
+    assert stored.artifact_key == f"tenants/{tenant_id}/renders/{digest_hex}.{extension}"
+    assert stored.payload_digest == sha256_digest(payload)
+    assert store.get_bytes(tenant_id, stored.artifact_key) == payload
+    assert store.client.content_types[(store.bucket, stored.artifact_key)] == media_type
+
+
 def test_presigned_urls_keep_the_bucket_in_the_path_for_neon_endpoints():
     tenant_id = uuid4()
     store = ArtifactStore(

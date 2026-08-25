@@ -215,6 +215,47 @@ class ArtifactStore:
             f"{candidate_hash}/{artifact_kind}/{digest}"
         )
 
+    def render_artifact_key(
+        self, tenant_id: UUID, payload_digest: str, extension: str
+    ) -> str:
+        if extension not in {"png", "svg"}:
+            raise ArtifactValidationError("render extension is not allowed")
+        digest = self._content_digest(payload_digest)
+        return f"{self.tenant_prefix(tenant_id)}renders/{digest}.{extension}"
+
+    def write_render_artifact(
+        self, tenant_id: UUID, payload: bytes, *, media_type: str
+    ) -> StoredContentArtifact:
+        extensions = {"image/png": "png", "image/svg+xml": "svg"}
+        extension = extensions.get(media_type)
+        if extension is None:
+            raise ArtifactValidationError("render media type is not allowed")
+        if not payload or len(payload) > self.max_bytes:
+            raise ArtifactValidationError(
+                "render artifact must be non-empty and within ARTIFACT_MAX_BYTES"
+            )
+        payload_digest = sha256_digest(payload)
+        key = self.render_artifact_key(tenant_id, payload_digest, extension)
+        self._storage_call(
+            "write render artifact",
+            lambda: self.client.put_object(
+                Bucket=self.bucket,
+                Key=key,
+                Body=payload,
+                ContentType=media_type,
+            ),
+        )
+        if self.get_bytes(tenant_id, key) != payload:
+            raise ArtifactValidationError(
+                "render artifact readback does not match published bytes"
+            )
+        return StoredContentArtifact(
+            artifact_key=key,
+            payload_digest=payload_digest,
+            media_type=media_type,
+            byte_length=len(payload),
+        )
+
     def validate_competence_key(
         self,
         tenant_id: UUID,

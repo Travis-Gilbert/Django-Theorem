@@ -37,6 +37,8 @@ INSTALLED_APPS = [
     "apps.competence",
     "apps.observation",
     "apps.support",
+    "apps.layout",
+    "apps.rendering",
 ]
 
 MIDDLEWARE = [
@@ -150,6 +152,30 @@ THEOREM_MACHINE_KEY = env("THEOREM_MACHINE_KEY", default="")
 # Empty VALKEY_URL/REDIS_URL → tenant_cache uses in-memory dict (tests / no Redis).
 VALKEY_URL = env("VALKEY_URL", default=env("REDIS_URL", default=""))
 REDIS_URL = VALKEY_URL
+LAYOUT_CACHE_TTL_SECONDS = env.int("LAYOUT_CACHE_TTL_SECONDS", default=24 * 60 * 60)
+LAYOUT_MEMORY_CACHE_MAX_ENTRIES = env.int(
+    "LAYOUT_MEMORY_CACHE_MAX_ENTRIES", default=1024
+)
+LAYOUT_SUBPROCESS_TIMEOUT_SECONDS = env.float(
+    "LAYOUT_SUBPROCESS_TIMEOUT_SECONDS", default=8.0
+)
+LAYOUT_MAX_OUTPUT_BYTES = env.int(
+    "LAYOUT_MAX_OUTPUT_BYTES", default=4 * 1024 * 1024
+)
+RENDER_SUBPROCESS_TIMEOUT_SECONDS = env.float(
+    "RENDER_SUBPROCESS_TIMEOUT_SECONDS", default=12.0
+)
+RENDER_CPU_SECONDS = env.int("RENDER_CPU_SECONDS", default=10)
+RENDER_MEMORY_BYTES = env.int("RENDER_MEMORY_BYTES", default=1024 * 1024 * 1024)
+RENDER_MAX_SOURCE_BYTES = env.int(
+    "RENDER_MAX_SOURCE_BYTES", default=256 * 1024
+)
+RENDER_OUTPUT_MAX_BYTES = env.int(
+    "RENDER_OUTPUT_MAX_BYTES", default=16 * 1024 * 1024
+)
+PLANTUML_JAR_PATH = env("PLANTUML_JAR_PATH", default="/opt/plantuml/plantuml.jar")
+PLANTUML_VERSION = env("PLANTUML_VERSION", default="1.2026.6")
+PLANTUML_SECURITY_PROFILE = env("PLANTUML_SECURITY_PROFILE", default="SANDBOX")
 
 # Celery
 CELERY_BROKER_URL = VALKEY_URL or "memory://"

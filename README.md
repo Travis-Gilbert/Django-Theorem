@@ -31,6 +31,7 @@ content-addressed prior/model artifacts, and exposes inspectable recovery state.
 - psycopg (Postgres via PgBouncer)
 - RunPod Serverless v2 lifecycle client for GPU/Python workloads
 - Separate Fly app and Celery queue `offload.r` for R workloads (agent name `"R"`)
+- Graphviz 2.42.2/PyGraphviz positions plus bounded PlantUML and Diagrams rendering
 
 ## Quick start
 
@@ -98,6 +99,14 @@ preflight as the Fly R worker before starting Celery.
 | `COMPETENCE_STALE_AFTER_SECONDS` | Age after which a running competence job is recoverable (default 900) |
 | `COMPETENCE_SWEEP_BATCH_SIZE` | Maximum queued competence jobs dispatched per sleep cycle (default 100) |
 | `COMPETENCE_SWEEP_INTERVAL_SECONDS` | Celery beat interval for competence recovery (default 3600) |
+| `LAYOUT_CACHE_TTL_SECONDS` | Tenant-scoped canonical layout response TTL (default 86400) |
+| `LAYOUT_MEMORY_CACHE_MAX_ENTRIES` | Bounded per-process fallback cache entry count (default 1024) |
+| `LAYOUT_SUBPROCESS_TIMEOUT_SECONDS` | Hard Graphviz worker deadline (default 8 seconds) |
+| `LAYOUT_MAX_OUTPUT_BYTES` | Maximum isolated Graphviz response bytes (default 4 MiB) |
+| `RENDER_SUBPROCESS_TIMEOUT_SECONDS` | PlantUML/Diagrams worker deadline (default 12 seconds) |
+| `RENDER_CPU_SECONDS` / `RENDER_MEMORY_BYTES` | Linux renderer CPU/address-space limits |
+| `RENDER_MAX_SOURCE_BYTES` / `RENDER_OUTPUT_MAX_BYTES` | Renderer input/output bounds |
+| `PLANTUML_JAR_PATH` / `PLANTUML_VERSION` / `PLANTUML_SECURITY_PROFILE` | Checksum-pinned PlantUML runtime identity and mandatory `SANDBOX` profile |
 
 ## Postgres schemas / roles
 
@@ -130,6 +139,9 @@ Django sets `search_path=control,public`. Settings force
 - `POST /internal/competence/refit` — submit a refit bound to a previous scorer
 - `GET /internal/competence/jobs/{job_id}` — inspect fit/refit state and artifacts
 - `POST /internal/competence/jobs/{job_id}/cleanup` — remove exact owned artifacts
+- `POST /internal/layout/compute` — return deterministic Graphviz center positions
+- `POST /internal/rendering/plantuml` — render SANDBOX PlantUML to tenant-owned SVG
+- `POST /internal/rendering/diagrams` — render restricted Diagrams source to tenant-owned PNG/SVG
 - `/admin/` — ops console (revoke key, re-run job, reset usage, impersonate grant)
 - `GET /healthz`
 
@@ -185,6 +197,51 @@ python manage.py competence_live_smoke \
 This proves the public deployed boundary and real artifact readback/cleanup.
 Its disposable scorer evidence remains a deterministic fixture and is not
 promotion evidence.
+
+### Graph layout and rendering
+
+`/internal/layout/compute` requires `layout:compute` (or `layout:*`). Callers
+send stable node/edge IDs and measured pixel sizes; Django selects a policy row,
+serializes sorted DOT, executes PyGraphviz in a deadline-bound subprocess, and
+returns center coordinates with the exact Graphviz version, effective policy,
+and an input digest. Canonical response bytes are cached under a tenant-scoped
+Valkey key. The service never mutates graph content.
+
+The two `/internal/rendering/*` routes require `rendering:render` (or
+`rendering:*`). PlantUML is forced to SVG under its SANDBOX security profile.
+Diagrams source is statically refused if any import names a package outside
+`diagrams`; the isolated interpreter repeats that import check at runtime. This
+is capability admission plus resource hygiene, not a Python security sandbox.
+Both renderers run synchronously in temporary working directories and isolated
+process groups with a credential-free child environment, deadlines, and
+pre-buffer file-size caps; the Linux deployment additionally applies CPU and
+address-space rlimits. Same-container execution is still not an isolation
+boundary for adversarial Python; deployments admitting untrusted Diagrams
+source must move that worker to a credential-free sandbox or sidecar.
+
+Rendered bytes are read back after upload and published as
+`tenants/<tenant-id>/renders/<sha256>.<ext>` with a short-lived presigned GET.
+The Docker image pins Debian Graphviz 2.42.2, compiles PyGraphviz 2.0.1 against
+that library, installs Diagrams 0.25.1 and OpenJDK 17, and checksum-verifies the
+PlantUML 1.2026.6 jar. `contracts/theorem.layout.v1.fixture.json` is a strict
+wire fixture; its named coordinates are not a substitute for the native
+container or hosted/authenticated oracles.
+
+Run the deployed smoke with a machine key carrying both `layout:compute` and
+`rendering:render`. The test downloads each signed artifact and verifies its
+digest; keep the key in the environment, never in the repository:
+
+```bash
+THEOREM_LAYOUT_RENDERING_LIVE_BASE_URL=https://control.example \
+THEOREM_LAYOUT_RENDERING_LIVE_MACHINE_KEY=thk_... \
+pytest -q -m live tests/test_layout_rendering_live.py
+```
+
+Two additional live gates are opt-in: set `THEOREM_LAYOUT_LIVE_VALKEY_URL`
+to prove real cache bytes equal a cold recompute, and set
+`THEOREM_CHAT_PLAN_LAYOUT_FIXTURE` to the uncommitted real 31-node/44-edge
+board JSON while supplying the deployed URL/key above. Neither gate accepts the
+two-node wire fixture as a substitute.
 
 ## RunPod and R execution contract
 

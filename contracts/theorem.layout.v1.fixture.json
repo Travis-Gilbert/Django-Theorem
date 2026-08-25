@@ -1,0 +1,53 @@
+{
+  "fixture_evidence": {
+    "evidence_class": "deterministic_contract_fixture",
+    "native_layout_oracle": false,
+    "note": "Positions exercise the wire contract only; native Graphviz receipts are separate."
+  },
+  "layout_request": {
+    "contract": "theorem.layout.v1",
+    "edges": [
+      {
+        "from": "W01",
+        "id": "e01",
+        "kind": "verifies",
+        "to": "V01"
+      }
+    ],
+    "graph_class": "plan_dag",
+    "nodes": [
+      {
+        "h_px": 40.0,
+        "id": "V01",
+        "kind": "verification",
+        "w_px": 96.0
+      },
+      {
+        "h_px": 48.0,
+        "id": "W01",
+        "kind": "work",
+        "w_px": 120.0
+      }
+    ],
+    "params": {}
+  },
+  "layout_response": {
+    "contract": "theorem.layout.v1",
+    "engine": "dot",
+    "graphviz_version": "2.42.2",
+    "input_digest": "sha256:9194b82adde229e529c19e07563ff503c966799582ed1eae9c9f1dc11966059a",
+    "policy_id": "plan_dag",
+    "positions": [
+      {
+        "id": "V01",
+        "x_px": 60.0,
+        "y_px": 20.0
+      },
+      {
+        "id": "W01",
+        "x_px": 60.0,
+        "y_px": 89.0
+      }
+    ]
+  }
+}
