@@ -84,6 +84,19 @@ def test_diagrams_validator_accepts_the_supported_language():
     assert tree.body
 
 
+def test_diagrams_validator_accepts_owned_symbols_modules_and_aliases():
+    source = """\
+from diagrams import Diagram as D
+from diagrams.aws import compute as aws_compute
+from diagrams.aws.compute import EC2 as Instance
+
+with D("Service"):
+    Instance("api")
+"""
+
+    assert validate_diagrams_source(source, max_bytes=16_384).body
+
+
 @pytest.mark.parametrize(
     "source",
     [
@@ -92,6 +105,10 @@ def test_diagrams_validator_accepts_the_supported_language():
         "from diagrams import Diagram\nx = __import__('subprocess')",
         'from diagrams import Diagram\nx = Diagram.__init__.__globals__["__builtins__"]',
         "from diagrams import Diagram\nx = globals()",
+        "from diagrams import os\nos.system('echo escaped')",
+        "from diagrams import os as diagrams_os\ndiagrams_os.system('echo escaped')",
+        "from diagrams import Path\nPath('/tmp/escaped').touch()",
+        "from diagrams import *\nos.system('echo escaped')",
     ],
 )
 def test_diagrams_validator_rejects_escape_surfaces(source):
@@ -106,7 +123,7 @@ def test_diagrams_refusal_happens_before_process_creation(monkeypatch):
     )
     with pytest.raises(DiagramSourceError):
         render_diagrams(
-            "import os\nfrom diagrams import Diagram\nwith Diagram('x'): pass",
+            "from diagrams import os\nos.system('echo escaped')",
             "png",
         )
 

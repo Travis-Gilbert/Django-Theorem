@@ -7,6 +7,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from types import ModuleType
 
 from diagrams import Diagram
 
@@ -14,7 +15,23 @@ from diagrams import Diagram
 def _diagrams_only_import(name, globals=None, locals=None, fromlist=(), level=0):
     if level != 0 or not (name == "diagrams" or name.startswith("diagrams.")):
         raise ImportError("imports are restricted to diagrams")
-    return builtins.__import__(name, globals, locals, fromlist, level)
+    if not fromlist:
+        if name == "diagrams":
+            raise ImportError("the diagrams package must not be imported directly")
+        return builtins.__import__(name, globals, locals, fromlist, level)
+    if "*" in fromlist:
+        raise ImportError("wildcard diagrams imports are not allowed")
+    module = builtins.__import__(name, globals, locals, fromlist, level)
+    for symbol in fromlist:
+        value = getattr(module, symbol, None)
+        owner = (
+            value.__name__
+            if isinstance(value, ModuleType)
+            else getattr(value, "__module__", None)
+        )
+        if owner != "diagrams" and not (owner and owner.startswith("diagrams.")):
+            raise ImportError("imports are restricted to diagrams-owned symbols")
+    return module
 
 
 def main() -> int:
