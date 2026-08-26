@@ -45,28 +45,48 @@ BUILD_CLIENTS = {"docker"}
 DOCKERIGNORE_REQUIRED_PATTERNS = (
     ".git",
     ".git/**",
+    ".github/",
+    ".agents/",
+    ".claude/",
+    ".codex/",
+    ".superpowers/",
     ".env",
     ".env*",
     ".env.*",
     "!.env.example",
+    "*.pem",
+    "*.key",
+    "*.p12",
+    "*.pfx",
+    "id_rsa",
+    "id_ed25519",
     ".venv/",
     "venv/",
     "**/__pycache__/",
     "*.py[cod]",
+    "*.egg-info/",
+    ".eggs/",
     ".pytest_cache/",
     ".mypy_cache/",
     ".ruff_cache/",
     ".coverage",
+    ".coverage.*",
     "htmlcov/",
-    "*.sqlite3",
-    "media/",
-    "logs/",
-    "tmp/",
-    "*.log",
     "build/",
     "dist/",
-    "*.pem",
-    "*.key",
+    "target/",
+    "node_modules/",
+    "*.sqlite",
+    "*.sqlite3",
+    "*.db",
+    "media/",
+    "staticfiles/",
+    "logs/",
+    "tmp/",
+    "temp/",
+    "*.log",
+    "celerybeat-schedule",
+    ".DS_Store",
 )
 
 
@@ -421,8 +441,8 @@ def _run_command(runtime: RuntimeCandidate, image_tag: str) -> list[str]:
     )
 
 
-def _remove_command(runtime: RuntimeCandidate, image_tag: str) -> list[str]:
-    return _runtime_command(runtime, "image", "rm", image_tag)
+def _remove_command(runtime: RuntimeCandidate, image_reference: str) -> list[str]:
+    return _runtime_command(runtime, "image", "rm", image_reference)
 
 
 def new_image_tag(context_digest: str) -> str:
@@ -481,16 +501,23 @@ def cleanup_created_image(
             f"image tag ownership changed; refusing cleanup for {image_tag}"
         )
     status, output = _run_bounded(
-        _remove_command(runtime, image_tag),
+        _remove_command(runtime, created_image_id),
         timeout_seconds=PROCESS_TIMEOUT_SECONDS,
         cwd=REPOSITORY_ROOT,
         check=False,
     )
+    remaining_image_id = inspect_image_id(runtime, image_tag)
+    if remaining_image_id not in (None, created_image_id):
+        refusal = f"; immutable-ID removal result: {output[-4000:]}" if output else ""
+        raise ContainerOracleError(
+            f"image tag ownership changed during cleanup for {image_tag}{refusal}"
+        )
     if status != 0:
         raise ContainerOracleError(
-            f"helper-owned image cleanup failed for {image_tag}: {output[-4000:]}"
+            "helper-owned immutable image cleanup failed for "
+            f"{created_image_id}: {output[-4000:]}"
         )
-    if inspect_image_id(runtime, image_tag) is not None:
+    if remaining_image_id == created_image_id:
         raise ContainerOracleError(f"helper image survived cleanup: {image_tag}")
 
 

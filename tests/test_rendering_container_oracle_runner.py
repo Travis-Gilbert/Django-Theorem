@@ -67,6 +67,34 @@ def test_dockerignore_contract_rejects_missing_secret_and_state_exclusions(tmp_p
         runner.verify_dockerignore(dockerignore)
 
 
+def test_checked_in_dockerignore_is_the_canonical_security_contract():
+    declared = tuple(
+        line.strip()
+        for line in (runner.REPOSITORY_ROOT / ".dockerignore")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    )
+
+    assert declared == runner.DOCKERIGNORE_REQUIRED_PATTERNS
+
+
+@pytest.mark.parametrize("missing_pattern", runner.DOCKERIGNORE_REQUIRED_PATTERNS)
+def test_every_dockerignore_security_pattern_is_drift_gated(
+    tmp_path, missing_pattern
+):
+    remaining = [
+        pattern
+        for pattern in runner.DOCKERIGNORE_REQUIRED_PATTERNS
+        if pattern != missing_pattern
+    ]
+    dockerignore = tmp_path / ".dockerignore"
+    dockerignore.write_text("\n".join(remaining) + "\n", encoding="utf-8")
+
+    with pytest.raises(runner.ContainerOracleError, match=".dockerignore"):
+        runner.verify_dockerignore(dockerignore)
+
+
 @pytest.mark.parametrize(
     "endpoint",
     ("tcp://127.0.0.1:2375", "tcp://builder.internal:2376", "ssh://builder"),
@@ -166,6 +194,38 @@ def test_concurrent_retag_is_not_deleted(monkeypatch):
             "theorem-rendering-oracle:fixture",
             "sha256:" + "a" * 64,
         )
+
+
+def test_cleanup_targets_immutable_id_when_tag_changes_after_inspection(monkeypatch):
+    runtime = runner.RuntimeCandidate(
+        "docker", "/usr/local/bin/docker", "usable", "local", "unix:///tmp/docker.sock"
+    )
+    created_image_id = "sha256:" + "a" * 64
+    replacement_image_id = "sha256:" + "b" * 64
+    current_tag_owner = [created_image_id]
+    removal_commands = []
+
+    monkeypatch.setattr(
+        runner,
+        "inspect_image_id",
+        lambda _runtime, _tag: current_tag_owner[0],
+    )
+
+    def run(command, **_kwargs):
+        removal_commands.append(command)
+        current_tag_owner[0] = replacement_image_id
+        return 0, "removed helper image"
+
+    monkeypatch.setattr(runner, "_run_bounded", run)
+
+    with pytest.raises(runner.ContainerOracleError, match="ownership changed"):
+        runner.cleanup_created_image(
+            runtime,
+            "theorem-rendering-oracle:fixture",
+            created_image_id,
+        )
+
+    assert removal_commands[0][-1] == created_image_id
 
 
 def test_cleanup_failure_preserves_the_primary_failure():

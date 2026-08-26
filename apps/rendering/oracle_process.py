@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 DIAGNOSTIC_TAIL_BYTES = 4_000
+COMMAND_CONTEXT_BYTES = 1_000
 
 
 class BoundedProcessError(RuntimeError):
@@ -42,6 +43,41 @@ def _redact(value: str, sensitive_values: Sequence[str]) -> str:
         if sensitive:
             redacted = redacted.replace(sensitive, "<redacted>")
     return redacted
+
+
+def _utf8_safe_tail(value: str, max_bytes: int) -> str:
+    encoded = value.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return value
+    return encoded[-max_bytes:].decode("utf-8", errors="ignore")
+
+
+def _utf8_safe_head(value: str, max_bytes: int) -> str:
+    encoded = value.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return value
+    return encoded[:max_bytes].decode("utf-8", errors="ignore")
+
+
+def _diagnostic_tail(
+    raw: bytes | bytearray | str, sensitive_values: Sequence[str]
+) -> str:
+    value = (
+        bytes(raw).decode("utf-8", errors="replace")
+        if isinstance(raw, (bytes, bytearray))
+        else raw
+    )
+    return _utf8_safe_tail(
+        _redact(value, sensitive_values), DIAGNOSTIC_TAIL_BYTES
+    )
+
+
+def _command_context(
+    command: Sequence[str], sensitive_values: Sequence[str]
+) -> str:
+    return _utf8_safe_head(
+        _redact(" ".join(command), sensitive_values), COMMAND_CONTEXT_BYTES
+    )
 
 
 def _terminate_process_group(process: subprocess.Popen[bytes]) -> None:
@@ -91,11 +127,11 @@ def run_bounded_process(
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 _terminate_process_group(process)
-                diagnostic = _redact(
-                    tail.decode("utf-8", errors="replace"), sensitive_values
-                )
+                diagnostic = _diagnostic_tail(tail, sensitive_values)
                 raise ProcessTimedOut(
-                    f"process exceeded {timeout_seconds:g}s: {command[0]}\n{diagnostic}"
+                    f"process exceeded {timeout_seconds:g}s\n"
+                    f"command: {_command_context(command, sensitive_values)}\n"
+                    f"diagnostic:\n{diagnostic}"
                 )
             events = selector.select(timeout=min(remaining, 0.1))
             for key, _mask in events:
@@ -114,26 +150,29 @@ def run_bounded_process(
                 total_bytes += len(chunk)
                 if total_bytes > output_max_bytes:
                     _terminate_process_group(process)
-                    diagnostic = _redact(
-                        tail.decode("utf-8", errors="replace"), sensitive_values
-                    )
+                    diagnostic = _diagnostic_tail(tail, sensitive_values)
                     raise ProcessOutputLimitExceeded(
-                        "process output cap exceeded: "
-                        f"{output_max_bytes} bytes for {command[0]}\n{diagnostic}"
+                        f"process output cap exceeded: {output_max_bytes} bytes\n"
+                        f"command: {_command_context(command, sensitive_values)}\n"
+                        f"diagnostic:\n{diagnostic}"
                     )
 
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             _terminate_process_group(process)
             raise ProcessTimedOut(
-                f"process exceeded {timeout_seconds:g}s: {command[0]}"
+                f"process exceeded {timeout_seconds:g}s\n"
+                f"command: {_command_context(command, sensitive_values)}\n"
+                f"diagnostic:\n{_diagnostic_tail(tail, sensitive_values)}"
             )
         try:
             returncode = process.wait(timeout=remaining)
         except subprocess.TimeoutExpired as exc:
             _terminate_process_group(process)
             raise ProcessTimedOut(
-                f"process exceeded {timeout_seconds:g}s: {command[0]}"
+                f"process exceeded {timeout_seconds:g}s\n"
+                f"command: {_command_context(command, sensitive_values)}\n"
+                f"diagnostic:\n{_diagnostic_tail(tail, sensitive_values)}"
             ) from exc
     except BaseException:
         if process.poll() is None:
@@ -146,12 +185,17 @@ def run_bounded_process(
 
     stdout = streams[process.stdout].decode("utf-8", errors="replace").strip()
     stderr = streams[process.stderr].decode("utf-8", errors="replace").strip()
-    output = _redact(
-        "\n".join(part for part in (stdout, stderr) if part), sensitive_values
+    output = _utf8_safe_tail(
+        _redact(
+            "\n".join(part for part in (stdout, stderr) if part), sensitive_values
+        ),
+        output_max_bytes,
     )
     if check and returncode != 0:
+        diagnostic = _diagnostic_tail(output, sensitive_values)
         raise ProcessExitedNonzero(
-            f"process failed ({returncode}): {' '.join(command)}\n"
-            f"{output[-DIAGNOSTIC_TAIL_BYTES:]}"
+            f"process failed ({returncode})\n"
+            f"command: {_command_context(command, sensitive_values)}\n"
+            f"diagnostic:\n{diagnostic}"
         )
     return BoundedProcessResult(returncode=returncode, output=output)
