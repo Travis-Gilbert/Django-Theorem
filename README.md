@@ -142,6 +142,7 @@ Django sets `search_path=control,public`. Settings force
 - `POST /internal/layout/compute` — return deterministic Graphviz center positions
 - `POST /internal/rendering/plantuml` — render SANDBOX PlantUML to tenant-owned SVG
 - `POST /internal/rendering/diagrams` — render restricted Diagrams source to tenant-owned PNG/SVG
+- `POST /internal/rendering/descriptor` — refresh a short-lived descriptor for one exact tenant-owned render key
 - `/admin/` — ops console (revoke key, re-run job, reset usage, impersonate grant)
 - `GET /healthz`
 
@@ -207,8 +208,11 @@ returns center coordinates with the exact Graphviz version, effective policy,
 and an input digest. Canonical response bytes are cached under a tenant-scoped
 Valkey key. The service never mutates graph content.
 
-The two `/internal/rendering/*` routes require `rendering:render` (or
-`rendering:*`). PlantUML is forced to SVG under its SANDBOX security profile.
+All three `/internal/rendering/*` routes require `rendering:render` (or
+`rendering:*`). The descriptor route derives the tenant from that admitted key,
+verifies the exact content-addressed object and digest, and presigns a fresh GET;
+it does not accept a payload tenant or mint a URL before storage readback.
+PlantUML is forced to SVG under its SANDBOX security profile.
 Diagrams source is statically refused if any import names a package outside
 `diagrams`; the isolated interpreter repeats that import check at runtime. This
 is capability admission plus resource hygiene, not a Python security sandbox.
@@ -227,11 +231,26 @@ PlantUML 1.2026.6 jar. `contracts/theorem.layout.v1.fixture.json` is a strict
 wire fixture; its named coordinates are not a substitute for the native
 container or hosted/authenticated oracles.
 
+Evidence is intentionally split by boundary:
+
+| Boundary | Current evidence | Not implied |
+| --- | --- | --- |
+| Fixture and source projection | Exact `theorem.layout.v1` fixture plus reproducible generation-15 31-node/44-edge topology | No Graphviz execution |
+| Local process | Native Graphviz 14.1.5 exact-board layout and real Valkey cold/warm/version-key replay | No declared-image or hosted cache proof |
+| Production adapter, local endpoint | `ArtifactStore.from_settings()` through checksum-bound disposable MinIO, signed readback/expiry, and cross-tenant refusal | No hosted object-storage proof |
+| Native renderer | Checksum/version-bound PlantUML 1.2026.6 and Diagrams 0.25.1 through native Graphviz 14.1.5 | No declared-image Graphviz 2.42.2 proof |
+| Declared image | Gate implemented; last preflight exited `2` because no supported local Docker client/engine was available and the volume was below the 20 GiB floor | Not passed |
+| Hosted/authenticated | Env-gated tests committed | Not run without deployment URLs, credentials, hosted Valkey, and hosted object storage |
+
 Replay the native rendering boundary without installing host packages:
 
 ```bash
 TMPDIR=/tmp .venv/bin/python scripts/run-rendering-native-oracles.py
 ```
+
+Exit `0` is the only passing native-renderer receipt. Exit `1` means an
+identity, checksum, render, refusal, bound, or cleanup oracle failed; it is not
+a prerequisite skip.
 
 The helper downloads PlantUML 1.2026.6 and the official Graphviz 14.1.5 release
 into a bounded temporary directory, verifies both reviewed SHA-256 values,
@@ -256,6 +275,9 @@ runs both production renderers, `manage.py check`, and the cold layout fixture,
 then removes its helper-owned image tag. Missing runtime or disk capacity exits
 with prerequisite status 2; host Graphviz is never credited as declared-image
 evidence. Hosted/authenticated proof remains the separate live test below.
+Exit `0` alone proves the declared image. Exit `2` means a named host
+prerequisite is absent and keeps the gate open. Exit `1` means the declared
+recipe or an executed image probe violated its oracle.
 
 Run the deployed smoke with a machine key carrying both `layout:compute` and
 `rendering:render`. The test downloads each signed artifact and verifies its
@@ -264,7 +286,7 @@ digest; keep the key in the environment, never in the repository:
 ```bash
 THEOREM_LAYOUT_RENDERING_LIVE_BASE_URL=https://control.example \
 THEOREM_LAYOUT_RENDERING_LIVE_MACHINE_KEY=thk_... \
-pytest -q -m live tests/test_layout_rendering_live.py
+.venv/bin/pytest -q -m live tests/test_layout_rendering_live.py
 ```
 
 The exact 31-node/44-edge Agent Chat board is committed as
@@ -274,11 +296,30 @@ for an explicitly versioned successor. Set `THEOREM_LAYOUT_LIVE_VALKEY_URL` to
 run the separate deployed Valkey cache oracle. Neither gate accepts the
 two-node wire fixture as a substitute.
 
+To run every hosted row in one invocation, provide all three variables:
+
+```bash
+THEOREM_LAYOUT_RENDERING_LIVE_BASE_URL=https://control.example \
+THEOREM_LAYOUT_RENDERING_LIVE_MACHINE_KEY=thk_... \
+THEOREM_LAYOUT_LIVE_VALKEY_URL=redis://hosted-valkey.example:6379/0 \
+.venv/bin/pytest -q -m live tests/test_layout_rendering_live.py
+```
+
+Pytest exit `0` is credit only for rows that actually executed. A zero exit
+with skipped rows is not a hosted receipt; inspect the summary and require zero
+skips for the intended set.
+
 Run the complete bounded local replay with:
 
 ```bash
 .venv/bin/python scripts/run-layout-local-oracles.py
 ```
+
+Exit `0` means the helper-owned receipt contained exactly four expected tests,
+four passes, and zero skips/failures/errors, followed by bounded process/port/
+temporary-state cleanup. Exit `1` means a prerequisite or oracle failed. Exit
+`130` means interruption completed its cleanup; neither nonzero status is a
+pass.
 
 Before downloading MinIO, the replay resolves `THEOREM_TEST_VALKEY_SERVER` or
 `valkey-server` on `PATH`, requires its real path to be executable, and verifies
