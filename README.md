@@ -227,6 +227,36 @@ PlantUML 1.2026.6 jar. `contracts/theorem.layout.v1.fixture.json` is a strict
 wire fixture; its named coordinates are not a substitute for the native
 container or hosted/authenticated oracles.
 
+Replay the native rendering boundary without installing host packages:
+
+```bash
+TMPDIR=/tmp .venv/bin/python scripts/run-rendering-native-oracles.py
+```
+
+The helper downloads PlantUML 1.2026.6 and the official Graphviz 14.1.5 release
+into a bounded temporary directory, verifies both reviewed SHA-256 values,
+builds Graphviz under that temporary prefix, and calls the production PlantUML
+and isolated Diagrams functions. It requires real SVG and PNG bytes,
+digest-derived tenant render keys, SANDBOX local-include refusal, a refusal that
+names a forbidden Diagrams import, and complete temporary-state cleanup. This
+is native renderer evidence only: Graphviz 14.1.5 does not substitute for the
+declared image's Graphviz 2.42.2 pin.
+
+Run the declared-image preflight and gate with:
+
+```bash
+.venv/bin/python scripts/run-rendering-container-oracles.py
+```
+
+The command inventories Docker, Podman, Colima/Lima, Finch, nerdctl, Apple
+`container`, and OrbStack without starting or installing a service. With an
+already-usable image client and at least 20 GiB free, it builds `Dockerfile`,
+checks exact Graphviz, PyGraphviz, Diagrams, Java, and PlantUML identities,
+runs both production renderers, `manage.py check`, and the cold layout fixture,
+then removes its helper-owned image tag. Missing runtime or disk capacity exits
+with prerequisite status 2; host Graphviz is never credited as declared-image
+evidence. Hosted/authenticated proof remains the separate live test below.
+
 Run the deployed smoke with a machine key carrying both `layout:compute` and
 `rendering:render`. The test downloads each signed artifact and verifies its
 digest; keep the key in the environment, never in the repository:

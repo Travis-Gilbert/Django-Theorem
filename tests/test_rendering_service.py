@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import resource
 import sys
+from hashlib import sha256
 from dataclasses import dataclass
 from datetime import timedelta
 from uuid import uuid4
@@ -215,34 +216,93 @@ def test_renderer_subprocess_environment_excludes_parent_secrets(monkeypatch):
     assert environment["PYTHONHASHSEED"] == "0"
 
 
+def test_renderer_subprocess_environment_admits_only_an_absolute_graphviz_bin(
+    tmp_path,
+):
+    graphviz_bin = tmp_path / "graphviz" / "bin"
+    graphviz_bin.mkdir(parents=True)
+
+    with override_settings(RENDER_GRAPHVIZ_BIN_DIR=str(graphviz_bin)):
+        from apps.rendering.service import _subprocess_environment
+
+        environment = _subprocess_environment()
+
+    assert environment["PATH"].split(":", 1)[0] == str(graphviz_bin.resolve())
+
+    with override_settings(RENDER_GRAPHVIZ_BIN_DIR="relative/bin"):
+        with pytest.raises(RenderExecutionError, match="absolute"):
+            _subprocess_environment()
+
+
 def test_plantuml_command_forces_sandbox_and_server_owned_svg(
     tmp_path, monkeypatch
 ):
     jar_path = tmp_path / "plantuml.jar"
     jar_path.write_bytes(b"fixture")
+    jar_digest = sha256(b"fixture").hexdigest()
     calls = []
 
     def record(command, *, stdin, cwd=None):
         calls.append((command, stdin, cwd))
+        if command[-1] == "-version":
+            return b"PlantUML version 1.2026.6 / fixture\n"
         return b'<svg xmlns="http://www.w3.org/2000/svg"></svg>'
 
     monkeypatch.setattr("apps.rendering.service._run", record)
     with override_settings(
         PLANTUML_JAR_PATH=str(jar_path),
         PLANTUML_VERSION="1.2026.6",
+        PLANTUML_SHA256=jar_digest,
         PLANTUML_SECURITY_PROFILE="SANDBOX",
     ):
         _payload, media_type, version = render_plantuml(
             "@startuml\nAlice -> Bob\n@enduml"
         )
 
-    command, stdin, cwd = calls[0]
+    assert calls[0][0][-1] == "-version"
+    command, stdin, cwd = calls[1]
     assert "-DPLANTUML_SECURITY_PROFILE=SANDBOX" in command
     assert command[-2:] == ["-tsvg", "-pipe"]
     assert stdin.startswith(b"@startuml")
     assert cwd is None
     assert media_type == "image/svg+xml"
     assert version == "1.2026.6"
+
+
+def test_plantuml_refuses_a_checksum_mismatch_before_java(tmp_path, monkeypatch):
+    jar_path = tmp_path / "plantuml.jar"
+    jar_path.write_bytes(b"unreviewed")
+    monkeypatch.setattr(
+        "apps.rendering.service._run",
+        lambda *_args, **_kwargs: pytest.fail("unverified jar reached Java"),
+    )
+
+    with override_settings(
+        PLANTUML_JAR_PATH=str(jar_path),
+        PLANTUML_VERSION="1.2026.6",
+        PLANTUML_SHA256="0" * 64,
+        PLANTUML_SECURITY_PROFILE="SANDBOX",
+    ):
+        with pytest.raises(RenderExecutionError, match="checksum"):
+            render_plantuml("@startuml\nAlice -> Bob\n@enduml")
+
+
+def test_plantuml_refuses_a_release_identity_mismatch(tmp_path, monkeypatch):
+    jar_path = tmp_path / "plantuml.jar"
+    jar_path.write_bytes(b"reviewed")
+
+    monkeypatch.setattr(
+        "apps.rendering.service._run",
+        lambda *_args, **_kwargs: b"PlantUML version 1.2026.5 / wrong\n",
+    )
+    with override_settings(
+        PLANTUML_JAR_PATH=str(jar_path),
+        PLANTUML_VERSION="1.2026.6",
+        PLANTUML_SHA256=sha256(b"reviewed").hexdigest(),
+        PLANTUML_SECURITY_PROFILE="SANDBOX",
+    ):
+        with pytest.raises(RenderExecutionError, match="release identity"):
+            render_plantuml("@startuml\nAlice -> Bob\n@enduml")
 
 
 @pytest.mark.django_db

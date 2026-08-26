@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import environ
@@ -173,8 +172,13 @@ RENDER_MAX_SOURCE_BYTES = env.int(
 RENDER_OUTPUT_MAX_BYTES = env.int(
     "RENDER_OUTPUT_MAX_BYTES", default=16 * 1024 * 1024
 )
+RENDER_GRAPHVIZ_BIN_DIR = env("RENDER_GRAPHVIZ_BIN_DIR", default="")
 PLANTUML_JAR_PATH = env("PLANTUML_JAR_PATH", default="/opt/plantuml/plantuml.jar")
 PLANTUML_VERSION = env("PLANTUML_VERSION", default="1.2026.6")
+PLANTUML_SHA256 = env(
+    "PLANTUML_SHA256",
+    default="89948f14c93756c7a3fb7b69078ff37e8489fd79dd430c582b931e2f65358690",
+)
 PLANTUML_SECURITY_PROFILE = env("PLANTUML_SECURITY_PROFILE", default="SANDBOX")
 
 # Celery

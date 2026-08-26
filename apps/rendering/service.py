@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.metadata
 import json
 import os
+import re
 import resource
 import signal
 import subprocess
@@ -43,12 +45,32 @@ def _resource_limits() -> None:
 def _subprocess_environment() -> dict[str, str]:
     """Return a credential-free environment with only renderer necessities."""
 
-    return {
+    environment = {
         "LANG": "C.UTF-8",
         "LC_ALL": "C.UTF-8",
         "PATH": "/usr/local/bin:/usr/bin:/bin",
+        "PLANTUML_SECURITY_PROFILE": str(settings.PLANTUML_SECURITY_PROFILE),
         "PYTHONHASHSEED": "0",
     }
+    graphviz_bin = str(getattr(settings, "RENDER_GRAPHVIZ_BIN_DIR", "")).strip()
+    if graphviz_bin:
+        candidate = Path(graphviz_bin)
+        if not candidate.is_absolute():
+            raise RenderExecutionError(
+                "RENDER_GRAPHVIZ_BIN_DIR must be an absolute directory"
+            )
+        try:
+            resolved = candidate.resolve(strict=True)
+        except OSError as exc:
+            raise RenderExecutionError(
+                "RENDER_GRAPHVIZ_BIN_DIR is unavailable"
+            ) from exc
+        if not resolved.is_dir():
+            raise RenderExecutionError(
+                "RENDER_GRAPHVIZ_BIN_DIR must resolve to a directory"
+            )
+        environment["PATH"] = f"{resolved}:{environment['PATH']}"
+    return environment
 
 
 def _read_bounded(stream, limit: int) -> bytes:
@@ -116,6 +138,43 @@ def _validate_svg(payload: bytes) -> None:
         raise RenderExecutionError("renderer returned unsafe SVG")
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as jar:
+        while chunk := jar.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _verify_plantuml_runtime(jar_path: Path) -> str:
+    expected_digest = str(settings.PLANTUML_SHA256).strip()
+    if not re.fullmatch(r"[0-9a-f]{64}", expected_digest):
+        raise RenderExecutionError("PlantUML checksum configuration is malformed")
+    actual_digest = _sha256_file(jar_path)
+    if actual_digest != expected_digest:
+        raise RenderExecutionError(
+            f"PlantUML checksum mismatch: {actual_digest} != {expected_digest}"
+        )
+
+    expected_version = str(settings.PLANTUML_VERSION).strip()
+    if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)+", expected_version):
+        raise RenderExecutionError("PlantUML version configuration is malformed")
+    version_output = _run(
+        ["java", "-jar", str(jar_path), "-version"],
+        stdin=b"",
+    ).decode("utf-8", errors="replace")
+    first_line = version_output.splitlines()[0] if version_output else ""
+    match = re.fullmatch(
+        r"PlantUML version (?P<version>[0-9]+(?:\.[0-9]+)+)(?: / .+)?",
+        first_line,
+    )
+    if match is None or match.group("version") != expected_version:
+        raise RenderExecutionError(
+            f"PlantUML release identity mismatch: {first_line!r}"
+        )
+    return expected_version
+
+
 def render_plantuml(source: str) -> tuple[bytes, str, str]:
     encoded = source.encode("utf-8")
     max_source = int(getattr(settings, "RENDER_MAX_SOURCE_BYTES", 256 * 1024))
@@ -127,19 +186,27 @@ def render_plantuml(source: str) -> tuple[bytes, str, str]:
     security_profile = str(settings.PLANTUML_SECURITY_PROFILE)
     if security_profile != "SANDBOX":
         raise RenderExecutionError("PlantUML security profile must be SANDBOX")
+    version = _verify_plantuml_runtime(jar_path)
     payload = _run(
         [
             "java",
             f"-DPLANTUML_SECURITY_PROFILE={security_profile}",
             "-jar",
             str(jar_path),
+            "-failfast2",
             "-tsvg",
             "-pipe",
         ],
         stdin=encoded,
     )
     _validate_svg(payload)
-    return payload, "image/svg+xml", str(settings.PLANTUML_VERSION)
+    lowered = payload.lower()
+    if any(
+        marker in lowered
+        for marker in (b"cannot open url", b"cannot include ", b"syntax error?")
+    ):
+        raise RenderExecutionError("PlantUML returned an error SVG")
+    return payload, "image/svg+xml", version
 
 
 def render_diagrams(source: str, output_format: str) -> tuple[bytes, str, str]:
