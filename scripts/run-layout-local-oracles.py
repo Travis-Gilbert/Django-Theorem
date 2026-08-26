@@ -27,15 +27,29 @@ import boto3
 from botocore.config import Config
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+if str(REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPOSITORY_ROOT))
+
+from apps.rendering.oracle_process import BoundedProcessError  # noqa: E402
+from apps.rendering.oracle_process import run_bounded_process  # noqa: E402
+
 MINIO_RELEASE = "RELEASE.2025-09-07T16-13-09Z"
 MINIO_URL = (
     f"https://dl.min.io/server/minio/release/darwin-arm64/archive/minio.{MINIO_RELEASE}"
 )
 MINIO_SHA256 = "7c3b3039b76e55a1b80935848ed83998d5e8d317374f87851f46a019ff5c0aa4"
+# The reviewed immutable release is comfortably below this hard ceiling. Keep
+# the ceiling independent of server metadata so a missing or lying length
+# cannot turn the replay helper into an unbounded disk sink.
+MINIO_DOWNLOAD_MAX_BYTES = 256 * 1024 * 1024
+DOWNLOAD_READ_BYTES = 1024 * 1024
 DOWNLOAD_TIMEOUT_SECONDS = 30.0
 VERSION_TIMEOUT_SECONDS = 5.0
 READINESS_TIMEOUT_SECONDS = 15.0
 PYTEST_TIMEOUT_SECONDS = 180.0
+PYTEST_OUTPUT_MAX_BYTES = 256 * 1024
+PYTEST_DIAGNOSTIC_MAX_BYTES = 8 * 1024
+PYTEST_RECEIPT_MAX_BYTES = 256 * 1024
 SHUTDOWN_TIMEOUT_SECONDS = 5.0
 PORT_CLOSE_TIMEOUT_SECONDS = 3.0
 LOOPBACK_NO_PROXY = "127.0.0.1,localhost,::1"
@@ -189,21 +203,82 @@ def _download_and_verify(destination: Path) -> None:
     )
     digest = hashlib.sha256()
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    with (
-        opener.open(
+    deadline = time.monotonic() + DOWNLOAD_TIMEOUT_SECONDS
+    created_destination = False
+    try:
+        with opener.open(
             request,
             timeout=DOWNLOAD_TIMEOUT_SECONDS,
-        ) as response,
-        destination.open("xb") as output,
-    ):
-        while chunk := response.read(1024 * 1024):
-            digest.update(chunk)
-            output.write(chunk)
-    actual = digest.hexdigest()
-    if actual != MINIO_SHA256:
-        raise LocalOracleError(
-            f"pinned MinIO checksum mismatch: {actual} != {MINIO_SHA256}"
-        )
+        ) as response:
+            declared_length_value = response.headers.get("Content-Length")
+            declared_length: int | None = None
+            if declared_length_value is not None:
+                try:
+                    declared_length = int(declared_length_value)
+                except (TypeError, ValueError) as error:
+                    raise LocalOracleError(
+                        "pinned MinIO response has an invalid declared length"
+                    ) from error
+                if declared_length < 0:
+                    raise LocalOracleError(
+                        "pinned MinIO response has an invalid declared length"
+                    )
+                if declared_length > MINIO_DOWNLOAD_MAX_BYTES:
+                    raise LocalOracleError(
+                        "pinned MinIO declared length exceeds the download size cap"
+                    )
+
+            total_bytes = 0
+            with destination.open("xb") as output:
+                created_destination = True
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise LocalOracleError(
+                            "pinned MinIO download exceeded its whole-operation deadline"
+                        )
+                    response_socket = getattr(
+                        getattr(getattr(response, "fp", None), "raw", None),
+                        "_sock",
+                        None,
+                    )
+                    if response_socket is not None:
+                        response_socket.settimeout(remaining)
+                    chunk = response.read(DOWNLOAD_READ_BYTES)
+                    if time.monotonic() >= deadline:
+                        raise LocalOracleError(
+                            "pinned MinIO download exceeded its whole-operation deadline"
+                        )
+                    if not chunk:
+                        break
+                    next_total = total_bytes + len(chunk)
+                    if next_total > MINIO_DOWNLOAD_MAX_BYTES:
+                        raise LocalOracleError(
+                            "pinned MinIO download exceeded its size cap"
+                        )
+                    digest.update(chunk)
+                    output.write(chunk)
+                    total_bytes = next_total
+
+                if declared_length is not None and total_bytes != declared_length:
+                    raise LocalOracleError(
+                        "pinned MinIO response body does not match its declared length"
+                    )
+                actual = digest.hexdigest()
+                if actual != MINIO_SHA256:
+                    raise LocalOracleError(
+                        f"pinned MinIO checksum mismatch: {actual} != {MINIO_SHA256}"
+                    )
+    except BaseException as error:
+        if created_destination:
+            try:
+                destination.unlink(missing_ok=True)
+            except OSError as cleanup_error:
+                raise LocalOracleError(
+                    "pinned MinIO download failed and its partial file could not be "
+                    f"removed: {cleanup_error}"
+                ) from error
+        raise
 
 
 def _verify_binary_identity(binary: Path, environment: Mapping[str, str]) -> None:
@@ -366,7 +441,11 @@ def _require_pytest_receipt(receipt_path: Path) -> str:
     if not receipt_path.is_file():
         raise LocalOracleError("local-oracle pytest receipt is missing")
     try:
-        root = ET.parse(receipt_path).getroot()
+        with receipt_path.open("rb") as receipt:
+            document = receipt.read(PYTEST_RECEIPT_MAX_BYTES + 1)
+        if len(document) > PYTEST_RECEIPT_MAX_BYTES:
+            raise LocalOracleError("local-oracle pytest receipt size cap exceeded")
+        root = ET.fromstring(document)
     except (ET.ParseError, OSError) as error:
         raise LocalOracleError("local-oracle pytest receipt is malformed") from error
 
@@ -435,26 +514,32 @@ def _run_pytest(
 ) -> str:
     if receipt_path.exists():
         raise LocalOracleError("local-oracle pytest receipt path already exists")
-    process = subprocess.Popen(
-        _pytest_command(receipt_path),
-        cwd=REPOSITORY_ROOT,
-        env=environment,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        start_new_session=True,
-    )
     try:
-        output, _ = process.communicate(timeout=PYTEST_TIMEOUT_SECONDS)
-    except subprocess.TimeoutExpired as error:
-        _terminate_process_group(process, label="local-oracle pytest")
-        raise LocalOracleError("local-oracle pytest exceeded 180 seconds") from error
-    safe_output = _redact(output, sensitive_values)
-    if safe_output:
-        print(safe_output, end="" if safe_output.endswith("\n") else "\n")
-    return_code = process.returncode
-    if return_code != 0:
-        raise LocalOracleError(f"local-oracle pytest failed with exit {return_code}")
+        result = run_bounded_process(
+            _pytest_command(receipt_path),
+            environment=environment,
+            timeout_seconds=PYTEST_TIMEOUT_SECONDS,
+            output_max_bytes=PYTEST_OUTPUT_MAX_BYTES,
+            cwd=REPOSITORY_ROOT,
+            sensitive_values=sensitive_values,
+            check=False,
+        )
+    except BoundedProcessError as error:
+        detail = _redact(str(error), sensitive_values)
+        encoded_detail = detail.encode("utf-8")
+        if len(encoded_detail) > PYTEST_DIAGNOSTIC_MAX_BYTES:
+            detail = encoded_detail[-PYTEST_DIAGNOSTIC_MAX_BYTES:].decode(
+                "utf-8", errors="ignore"
+            )
+        raise LocalOracleError(
+            f"local-oracle pytest violated process bounds:\n{detail}"
+        ) from error
+    if result.output:
+        print(result.output)
+    if result.returncode != 0:
+        raise LocalOracleError(
+            f"local-oracle pytest failed with exit {result.returncode}"
+        )
     return _require_pytest_receipt(receipt_path)
 
 

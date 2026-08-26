@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
+import os
+import sys
+import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -18,6 +22,52 @@ RUNNER_SPEC = importlib.util.spec_from_file_location(
 assert RUNNER_SPEC is not None and RUNNER_SPEC.loader is not None
 runner = importlib.util.module_from_spec(RUNNER_SPEC)
 RUNNER_SPEC.loader.exec_module(runner)
+
+
+class _FakeDownloadResponse:
+    def __init__(
+        self,
+        chunks: tuple[bytes, ...],
+        *,
+        content_length: str | None = None,
+        after_read=None,
+    ) -> None:
+        self._chunks = list(chunks)
+        self.headers = {}
+        if content_length is not None:
+            self.headers["Content-Length"] = content_length
+        self.after_read = after_read
+        self.read_count = 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, _exception_type, _exception, _traceback):
+        return False
+
+    def read(self, _size: int) -> bytes:
+        self.read_count += 1
+        chunk = self._chunks.pop(0) if self._chunks else b""
+        if self.after_read is not None:
+            self.after_read()
+        return chunk
+
+
+class _FakeDownloadOpener:
+    def __init__(self, response: _FakeDownloadResponse) -> None:
+        self.response = response
+
+    def open(self, _request, *, timeout: float):
+        assert timeout > 0
+        return self.response
+
+
+def _install_fake_download(monkeypatch, response: _FakeDownloadResponse) -> None:
+    monkeypatch.setattr(
+        runner.urllib.request,
+        "build_opener",
+        lambda *_args, **_kwargs: _FakeDownloadOpener(response),
+    )
 
 
 def _write_receipt(
@@ -153,6 +203,92 @@ def test_missing_valkey_fails_before_minio_download(monkeypatch, tmp_path):
         runner.run_oracles()
 
 
+def test_minio_download_refuses_oversized_declared_length_before_body(
+    monkeypatch, tmp_path
+):
+    destination = tmp_path / "minio"
+    response = _FakeDownloadResponse((), content_length="11")
+    _install_fake_download(monkeypatch, response)
+    monkeypatch.setattr(runner, "MINIO_DOWNLOAD_MAX_BYTES", 10)
+
+    with pytest.raises(runner.LocalOracleError, match="declared length"):
+        runner._download_and_verify(destination)
+
+    assert response.read_count == 0
+    assert not destination.exists()
+
+
+@pytest.mark.parametrize("content_length", (None, "1"))
+def test_minio_download_refuses_stream_overflow_before_crossing_disk_cap(
+    monkeypatch, tmp_path, content_length
+):
+    destination = tmp_path / "minio"
+    response = _FakeDownloadResponse(
+        (b"a" * 6, b"b" * 6),
+        content_length=content_length,
+    )
+    _install_fake_download(monkeypatch, response)
+    monkeypatch.setattr(runner, "MINIO_DOWNLOAD_MAX_BYTES", 10)
+
+    with pytest.raises(runner.LocalOracleError, match="size cap"):
+        runner._download_and_verify(destination)
+
+    assert not destination.exists()
+
+
+def test_minio_download_enforces_whole_operation_deadline_on_slow_trickle(
+    monkeypatch, tmp_path
+):
+    class Clock:
+        now = 0.0
+
+        def monotonic(self) -> float:
+            return self.now
+
+        def advance(self) -> None:
+            self.now += 0.6
+
+    clock = Clock()
+    destination = tmp_path / "minio"
+    response = _FakeDownloadResponse((b"aa", b"bb"), after_read=clock.advance)
+    _install_fake_download(monkeypatch, response)
+    monkeypatch.setattr(runner.time, "monotonic", clock.monotonic)
+    monkeypatch.setattr(runner, "DOWNLOAD_TIMEOUT_SECONDS", 1.0)
+    monkeypatch.setattr(runner, "MINIO_DOWNLOAD_MAX_BYTES", 10)
+
+    with pytest.raises(runner.LocalOracleError, match="deadline"):
+        runner._download_and_verify(destination)
+
+    assert response.read_count == 2
+    assert not destination.exists()
+
+
+def test_minio_download_checksum_failure_removes_partial_file(monkeypatch, tmp_path):
+    destination = tmp_path / "minio"
+    response = _FakeDownloadResponse((b"wrong",), content_length="5")
+    _install_fake_download(monkeypatch, response)
+    monkeypatch.setattr(runner, "MINIO_DOWNLOAD_MAX_BYTES", 10)
+    monkeypatch.setattr(runner, "MINIO_SHA256", "0" * 64)
+
+    with pytest.raises(runner.LocalOracleError, match="checksum mismatch"):
+        runner._download_and_verify(destination)
+
+    assert not destination.exists()
+
+
+def test_minio_download_accepts_valid_bounded_immutable_payload(monkeypatch, tmp_path):
+    destination = tmp_path / "minio"
+    payload = b"reviewed-minio-payload"
+    response = _FakeDownloadResponse((payload,), content_length=str(len(payload)))
+    _install_fake_download(monkeypatch, response)
+    monkeypatch.setattr(runner, "MINIO_DOWNLOAD_MAX_BYTES", len(payload))
+    monkeypatch.setattr(runner, "MINIO_SHA256", hashlib.sha256(payload).hexdigest())
+
+    runner._download_and_verify(destination)
+
+    assert destination.read_bytes() == payload
+
+
 @pytest.mark.parametrize(
     ("tests", "skipped", "expected_message"),
     (
@@ -186,6 +322,15 @@ def test_pytest_receipt_refuses_missing_malformed_or_ambiguous_receipts(
         receipt.write_text(contents, encoding="utf-8")
 
     with pytest.raises(runner.LocalOracleError):
+        runner._require_pytest_receipt(receipt)
+
+
+def test_pytest_receipt_refuses_oversized_xml_before_parse(monkeypatch, tmp_path):
+    receipt = tmp_path / "receipt.xml"
+    receipt.write_bytes(b"x" * 65)
+    monkeypatch.setattr(runner, "PYTEST_RECEIPT_MAX_BYTES", 64)
+
+    with pytest.raises(runner.LocalOracleError, match="receipt size cap"):
         runner._require_pytest_receipt(receipt)
 
 
@@ -295,3 +440,67 @@ def test_pytest_receipt_accepts_only_the_four_required_passes(tmp_path):
     _write_receipt(receipt, tests=4, skipped=0, names=names)
 
     assert runner._require_pytest_receipt(receipt) == "4 passed, 0 skipped"
+
+
+def test_pytest_child_is_killed_when_streaming_output_crosses_cap(
+    monkeypatch, tmp_path
+):
+    receipt = tmp_path / "receipt.xml"
+    monkeypatch.setattr(
+        runner,
+        "_pytest_command",
+        lambda _receipt: [
+            sys.executable,
+            "-c",
+            (
+                "import sys,time; "
+                "sys.stdout.write('x' * 65536); sys.stdout.flush(); "
+                "time.sleep(5)"
+            ),
+        ],
+    )
+    monkeypatch.setattr(runner, "PYTEST_OUTPUT_MAX_BYTES", 1_024)
+    monkeypatch.setattr(runner, "PYTEST_TIMEOUT_SECONDS", 10.0)
+
+    started = time.monotonic()
+    with pytest.raises(runner.LocalOracleError, match="output cap"):
+        runner._run_pytest(
+            {"PATH": os.defpath},
+            receipt,
+            (),
+        )
+
+    assert time.monotonic() - started < 3.0
+
+
+def test_pytest_child_timeout_kills_group_and_redacts_bounded_tail(
+    monkeypatch, tmp_path
+):
+    receipt = tmp_path / "receipt.xml"
+    secret = "pytest-child-secret"
+    monkeypatch.setattr(
+        runner,
+        "_pytest_command",
+        lambda _receipt: [
+            sys.executable,
+            "-c",
+            (
+                "import os,sys,time; "
+                "sys.stdout.write(os.environ['ORACLE_SECRET']); sys.stdout.flush(); "
+                "time.sleep(5)"
+            ),
+        ],
+    )
+    monkeypatch.setattr(runner, "PYTEST_TIMEOUT_SECONDS", 0.2)
+
+    with pytest.raises(runner.LocalOracleError, match="exceeded") as raised:
+        runner._run_pytest(
+            {"PATH": os.defpath, "ORACLE_SECRET": secret},
+            receipt,
+            (secret,),
+        )
+
+    message = str(raised.value)
+    assert secret not in message
+    assert "<redacted>" in message
+    assert len(message.encode()) <= runner.PYTEST_DIAGNOSTIC_MAX_BYTES

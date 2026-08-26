@@ -14,8 +14,9 @@ from django.utils import timezone
 from apps.keys.mint import mint_api_key
 from apps.layout.cache import clear_memory_cache
 from apps.layout.cache import get_cached_response, set_cached_response
-from apps.layout.canonical import canonical_dot
-from apps.layout.contracts import LayoutRequest, LayoutResponse
+from apps.layout.canonical import MAX_LAYOUT_EDGES, MAX_LAYOUT_NODES, canonical_dot
+from apps.layout.canonical import validate_graph
+from apps.layout.contracts import LayoutEdge, LayoutNode, LayoutRequest, LayoutResponse
 from apps.layout.policy import POLICIES, classify_graph, resolve_policy
 from apps.layout.service import LayoutExecutionError, _execute_worker, compute_layout
 from apps.tenancy.models import Tenant
@@ -33,9 +34,7 @@ def request_payload(*, graph_class="plan_dag"):
             {"id": "V01", "w_px": 96, "h_px": 40, "kind": "verification"},
             {"id": "W01", "w_px": 120, "h_px": 48, "kind": "work"},
         ],
-        "edges": [
-            {"id": "e01", "from": "W01", "to": "V01", "kind": "verifies"}
-        ],
+        "edges": [{"id": "e01", "from": "W01", "to": "V01", "kind": "verifies"}],
         "params": {},
     }
 
@@ -97,9 +96,7 @@ def test_compute_is_authenticated_cached_and_byte_deterministic(
         }
 
     monkeypatch.setattr("apps.layout.service.graphviz_version", lambda: "2.42.2")
-    monkeypatch.setattr(
-        "apps.layout.service._execute_worker", deterministic_positions
-    )
+    monkeypatch.setattr("apps.layout.service._execute_worker", deterministic_positions)
 
     first = post_json(admitted_client, request_payload())
     second = post_json(admitted_client, request_payload())
@@ -125,8 +122,10 @@ def test_cache_is_tenant_scoped(admitted_client, monkeypatch):
     monkeypatch.setattr("apps.layout.service.graphviz_version", lambda: "2.42.2")
     monkeypatch.setattr(
         "apps.layout.service._execute_worker",
-        lambda _dot, _engine, node_ids: calls.append(node_ids)
-        or {node_id: {"x": 1.0, "y": 2.0} for node_id in node_ids},
+        lambda _dot, _engine, node_ids: (
+            calls.append(node_ids)
+            or {node_id: {"x": 1.0, "y": 2.0} for node_id in node_ids}
+        ),
     )
     other = Tenant.objects.create(slug=f"other-{uuid4()}", display_name="Other")
     other_key = mint_api_key(other, scopes=["layout:compute"])
@@ -254,9 +253,7 @@ def test_absent_graph_class_uses_structural_classifier():
         {
             **request_payload(),
             "graph_class": None,
-            "edges": [
-                {"id": "e01", "from": "W01", "to": "V01", "kind": "contains"}
-            ],
+            "edges": [{"id": "e01", "from": "W01", "to": "V01", "kind": "contains"}],
         }
     )
     assert classify_graph(containment.nodes, containment.edges) == "containment"
@@ -329,7 +326,53 @@ def test_dense_cyclic_classifier_selects_the_large_code_map_policy():
         }
     )
 
-    assert classify_graph(body.nodes, body.edges) == "code_map_large"
+    graph_class, policy, _focus_id = resolve_policy(
+        body.graph_class, body.nodes, body.edges, body.params
+    )
+
+    assert graph_class == "code_map_large"
+    assert policy.engine_for(len(body.nodes)) == "sfdp"
+
+
+def _admission_nodes(count: int) -> list[LayoutNode]:
+    return [
+        LayoutNode(id=f"n{index}", w_px=80, h_px=32, kind="symbol")
+        for index in range(count)
+    ]
+
+
+def _admission_edges(count: int) -> list[LayoutEdge]:
+    return [
+        LayoutEdge(id=f"e{index}", from_="n0", to="n1", kind="reference")
+        for index in range(count)
+    ]
+
+
+def test_graph_admission_accepts_exact_end_to_end_budget():
+    assert MAX_LAYOUT_NODES == 512
+    assert MAX_LAYOUT_EDGES == 4_096
+
+    validate_graph(
+        _admission_nodes(MAX_LAYOUT_NODES),
+        _admission_edges(MAX_LAYOUT_EDGES),
+    )
+
+
+@pytest.mark.parametrize(
+    ("node_count", "edge_count", "expected_message"),
+    (
+        (513, 0, "between 1 and 512 entries"),
+        (512, 4_097, "at most 4096 entries"),
+    ),
+)
+def test_graph_admission_refuses_end_to_end_budget_plus_one(
+    node_count, edge_count, expected_message
+):
+    with pytest.raises(ValueError, match=expected_message):
+        validate_graph(
+            _admission_nodes(node_count),
+            _admission_edges(edge_count),
+        )
 
 
 def test_layout_worker_output_is_capped_before_parent_memory(tmp_path, monkeypatch):

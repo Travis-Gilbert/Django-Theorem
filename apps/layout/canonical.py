@@ -10,6 +10,9 @@ from decimal import Decimal
 from apps.layout.contracts import LayoutEdge, LayoutNode
 from apps.layout.policy import LayoutPolicy
 
+MAX_LAYOUT_NODES = 512
+MAX_LAYOUT_EDGES = 4_096
+
 
 def _quote(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)
@@ -100,18 +103,16 @@ def canonical_dot(
 
     if policy.verify_sibling_ranks:
         for work_id, verify_id in _verification_rank_groups(nodes, edges):
-            lines.append(
-                f"  {{ rank=same; {_quote(work_id)}; {_quote(verify_id)}; }}"
-            )
+            lines.append(f"  {{ rank=same; {_quote(work_id)}; {_quote(verify_id)}; }}")
     lines.append("}")
     return "\n".join(lines) + "\n"
 
 
 def validate_graph(nodes: list[LayoutNode], edges: list[LayoutEdge]) -> None:
-    if not 1 <= len(nodes) <= 2_000:
-        raise ValueError("nodes must contain between 1 and 2000 entries")
-    if len(edges) > 10_000:
-        raise ValueError("edges must contain at most 10000 entries")
+    if not 1 <= len(nodes) <= MAX_LAYOUT_NODES:
+        raise ValueError(f"nodes must contain between 1 and {MAX_LAYOUT_NODES} entries")
+    if len(edges) > MAX_LAYOUT_EDGES:
+        raise ValueError(f"edges must contain at most {MAX_LAYOUT_EDGES} entries")
     node_ids = [node.id for node in nodes]
     edge_ids = [edge.id for edge in edges]
     if len(node_ids) != len(set(node_ids)):
