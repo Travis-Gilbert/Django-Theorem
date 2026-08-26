@@ -31,6 +31,10 @@ class ArtifactStorageError(RuntimeError):
     """The object store could not complete an otherwise valid artifact operation."""
 
 
+class ArtifactNotFoundError(ArtifactStorageError):
+    """The admitted artifact key does not exist in object storage."""
+
+
 @dataclass(frozen=True)
 class StoredArrowArtifact:
     artifact_key: str
@@ -384,7 +388,16 @@ class ArtifactStore:
                 raise ArtifactValidationError("artifact exceeds ARTIFACT_MAX_BYTES")
             return payload
 
-        return self._storage_call("read", read)
+        try:
+            return read()
+        except ClientError as exc:
+            error = exc.response.get("Error", {})
+            status = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+            if error.get("Code") in {"NoSuchKey", "NotFound", "404"} or status == 404:
+                raise ArtifactNotFoundError("artifact storage object is missing") from exc
+            raise ArtifactStorageError("artifact storage read failed") from exc
+        except BotoCoreError as exc:
+            raise ArtifactStorageError("artifact storage read failed") from exc
 
     def read_arrow(
         self,

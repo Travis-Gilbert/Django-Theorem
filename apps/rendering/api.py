@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import time
 
 from ninja import Router
 from ninja.errors import HttpError
@@ -10,14 +11,20 @@ from ninja.errors import HttpError
 from apps.keys.auth import RENDERING_RENDER_SCOPE, require_machine_key
 from apps.orchestration.artifacts import (
     ArtifactConfigurationError,
+    ArtifactNotFoundError,
     ArtifactStorageError,
     ArtifactStore,
     ArtifactValidationError,
+    is_sha256_digest,
+    sha256_digest,
 )
 from apps.rendering.contracts import (
     DiagramsRenderRequest,
     PlantUmlRenderRequest,
+    RefreshedRenderArtifact,
     RenderArtifact,
+    RenderDescriptorRequest,
+    RenderDescriptorResponse,
     RenderResponse,
 )
 from apps.rendering.service import (
@@ -79,3 +86,50 @@ def diagrams_render(request, body: DiagramsRenderRequest):
         renderer="diagrams",
         render=lambda: render_diagrams(body.source, body.format),
     )
+
+
+@router.post("/descriptor", response=RenderDescriptorResponse)
+def refresh_render_descriptor(request, body: RenderDescriptorRequest):
+    principal = require_machine_key(request, scope=RENDERING_RENDER_SCOPE)
+    try:
+        if (
+            body.artifact_id != body.payload_digest
+            or not is_sha256_digest(body.payload_digest)
+        ):
+            raise ArtifactValidationError("render artifact digest is malformed")
+        extension = "svg" if body.content_type == "image/svg+xml" else "png"
+        store = ArtifactStore.from_settings()
+        expected_key = store.render_artifact_key(
+            principal.tenant.id, body.payload_digest, extension
+        )
+        if body.artifact_key != expected_key:
+            raise ArtifactValidationError(
+                "artifact_key is outside the admitted tenant render scope"
+            )
+        payload = store.get_bytes(principal.tenant.id, body.artifact_key)
+        if sha256_digest(payload) != body.payload_digest:
+            raise ArtifactValidationError(
+                "render artifact bytes do not match the durable payload digest"
+            )
+        download_url = store.presign_get(principal.tenant.id, body.artifact_key)
+    except (ValueError, ArtifactValidationError) as exc:
+        raise HttpError(422, str(exc)) from exc
+    except ArtifactNotFoundError as exc:
+        raise HttpError(404, "render artifact missing") from exc
+    except (
+        ArtifactConfigurationError,
+        ArtifactStorageError,
+        OSError,
+    ) as exc:
+        raise HttpError(503, "render artifact unavailable") from exc
+
+    artifact = RefreshedRenderArtifact(
+        artifact_id=body.artifact_id,
+        artifact_key=body.artifact_key,
+        payload_digest=body.payload_digest,
+        content_type=body.content_type,
+        byte_length=len(payload),
+        download_url=download_url,
+        expires_at_ms=int((time.time() + store.presign_seconds) * 1000),
+    )
+    return RenderDescriptorResponse(renderer=body.renderer, artifact=artifact)

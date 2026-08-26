@@ -15,6 +15,7 @@ from django.test import override_settings
 from django.utils import timezone
 
 from apps.keys.mint import mint_api_key
+from apps.orchestration.artifacts import ArtifactNotFoundError, sha256_digest
 from apps.rendering.validation import DiagramSourceError, validate_diagrams_source
 from apps.rendering.service import (
     RenderExecutionError,
@@ -62,6 +63,43 @@ class RecordingArtifactStore:
 
     def presign_get(self, _tenant_id, artifact_key):
         return f"https://storage.example/{artifact_key}?signature=fixture"
+
+
+class DescriptorArtifactStore:
+    def __init__(self, *, tenant_id, payload, extension):
+        self.tenant_id = tenant_id
+        self.payload = payload
+        self.payload_digest = sha256_digest(payload)
+        self.artifact_key = (
+            f"tenants/{tenant_id}/renders/"
+            f"{self.payload_digest.removeprefix('sha256:')}.{extension}"
+        )
+        self.presign_seconds = 120
+        self.reads = []
+        self.presigns = []
+
+    def validate_key(self, tenant_id, artifact_key):
+        if tenant_id != self.tenant_id or artifact_key != self.artifact_key:
+            raise ValueError("artifact_key is outside the admitted tenant render scope")
+        return artifact_key
+
+    def render_artifact_key(self, tenant_id, payload_digest, extension):
+        if tenant_id != self.tenant_id or payload_digest != self.payload_digest:
+            raise ValueError("render identity is outside the admitted tenant scope")
+        return (
+            f"tenants/{tenant_id}/renders/"
+            f"{payload_digest.removeprefix('sha256:')}.{extension}"
+        )
+
+    def get_bytes(self, tenant_id, artifact_key):
+        self.validate_key(tenant_id, artifact_key)
+        self.reads.append((tenant_id, artifact_key))
+        return self.payload
+
+    def presign_get(self, tenant_id, artifact_key):
+        self.validate_key(tenant_id, artifact_key)
+        self.presigns.append((tenant_id, artifact_key))
+        return f"https://storage.example/{artifact_key}?signature={len(self.presigns)}"
 
 
 @pytest.fixture
@@ -269,6 +307,142 @@ def test_diagrams_renders_png_through_same_artifact_lane(
     assert response.json()["renderer"] == "diagrams"
     assert response.json()["artifact"]["content_type"] == "image/png"
     assert store.writes == [(rendering_client.tenant.id, png, "image/png")]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "renderer,content_type,extension,payload",
+    [
+        ("plantuml", "image/svg+xml", "svg", b"<svg>plantuml</svg>"),
+        ("diagrams", "image/svg+xml", "svg", b"<svg>diagrams</svg>"),
+        ("diagrams", "image/png", "png", b"\x89PNG\r\n\x1a\ndiagrams"),
+    ],
+)
+def test_descriptor_refresh_revalidates_tenant_bytes_and_returns_a_fresh_url(
+    rendering_client,
+    monkeypatch,
+    renderer,
+    content_type,
+    extension,
+    payload,
+):
+    store = DescriptorArtifactStore(
+        tenant_id=rendering_client.tenant.id,
+        payload=payload,
+        extension=extension,
+    )
+    monkeypatch.setattr(
+        "apps.rendering.api.ArtifactStore.from_settings", lambda: store
+    )
+    request = {
+        "contract": "theorem.rendering.v1",
+        "renderer": renderer,
+        "artifact_id": store.payload_digest,
+        "artifact_key": store.artifact_key,
+        "payload_digest": store.payload_digest,
+        "content_type": content_type,
+    }
+
+    first = post_json(rendering_client, "/internal/rendering/descriptor", request)
+    second = post_json(rendering_client, "/internal/rendering/descriptor", request)
+
+    assert first.status_code == 200, first.content
+    assert second.status_code == 200, second.content
+    first_body = first.json()
+    second_body = second.json()
+    assert first_body["contract"] == "theorem.rendering.v1"
+    assert first_body["renderer"] == renderer
+    assert first_body["artifact"]["artifact_id"] == store.payload_digest
+    assert first_body["artifact"]["artifact_key"] == store.artifact_key
+    assert first_body["artifact"]["payload_digest"] == store.payload_digest
+    assert first_body["artifact"]["content_type"] == content_type
+    assert first_body["artifact"]["byte_length"] == len(payload)
+    assert first_body["artifact"]["expires_at_ms"] > int(timezone.now().timestamp() * 1000)
+    assert first_body["artifact"]["download_url"].endswith("signature=1")
+    assert second_body["artifact"]["download_url"].endswith("signature=2")
+    assert store.reads == [
+        (rendering_client.tenant.id, store.artifact_key),
+        (rendering_client.tenant.id, store.artifact_key),
+    ]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"contract": "theorem.rendering.v2"},
+        {"renderer": "unknown"},
+        {"renderer": "plantuml", "content_type": "image/png"},
+        {"content_type": "text/html"},
+        {"artifact_id": "sha256:" + "b" * 64},
+        {"payload_digest": "not-a-digest"},
+        {"artifact_key": "tenants/other/renders/cross-tenant.svg"},
+    ],
+)
+def test_descriptor_refresh_fails_closed_for_untrusted_metadata(
+    rendering_client, monkeypatch, override
+):
+    payload = b"<svg>fixture</svg>"
+    store = DescriptorArtifactStore(
+        tenant_id=rendering_client.tenant.id,
+        payload=payload,
+        extension="svg",
+    )
+    monkeypatch.setattr(
+        "apps.rendering.api.ArtifactStore.from_settings", lambda: store
+    )
+    request = {
+        "contract": "theorem.rendering.v1",
+        "renderer": "plantuml",
+        "artifact_id": store.payload_digest,
+        "artifact_key": store.artifact_key,
+        "payload_digest": store.payload_digest,
+        "content_type": "image/svg+xml",
+    }
+    request.update(override)
+
+    response = post_json(
+        rendering_client, "/internal/rendering/descriptor", request
+    )
+
+    assert response.status_code == 422, response.content
+    assert store.presigns == []
+
+
+@pytest.mark.django_db
+def test_descriptor_refresh_reports_missing_storage_without_minting_a_url(
+    rendering_client, monkeypatch
+):
+    payload = b"<svg>missing</svg>"
+    store = DescriptorArtifactStore(
+        tenant_id=rendering_client.tenant.id,
+        payload=payload,
+        extension="svg",
+    )
+    monkeypatch.setattr(
+        store,
+        "get_bytes",
+        lambda *_args: (_ for _ in ()).throw(ArtifactNotFoundError("missing")),
+    )
+    monkeypatch.setattr(
+        "apps.rendering.api.ArtifactStore.from_settings", lambda: store
+    )
+
+    response = post_json(
+        rendering_client,
+        "/internal/rendering/descriptor",
+        {
+            "contract": "theorem.rendering.v1",
+            "renderer": "plantuml",
+            "artifact_id": store.payload_digest,
+            "artifact_key": store.artifact_key,
+            "payload_digest": store.payload_digest,
+            "content_type": "image/svg+xml",
+        },
+    )
+
+    assert response.status_code == 404, response.content
+    assert store.presigns == []
 
 
 @pytest.mark.django_db

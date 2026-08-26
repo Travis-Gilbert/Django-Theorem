@@ -6,8 +6,10 @@ from uuid import uuid4
 
 import pyarrow as pa
 import pytest
+from botocore.exceptions import ClientError
 
 from apps.orchestration.artifacts import (
+    ArtifactNotFoundError,
     ArtifactStore,
     ArtifactValidationError,
     arrow_schema_json,
@@ -79,6 +81,22 @@ def test_artifact_store_rejects_cross_tenant_object_keys(store):
 
     with pytest.raises(ArtifactValidationError, match="admitted tenant prefix"):
         store.presign_get(other, owner_key)
+
+
+def test_artifact_store_classifies_a_missing_object_separately(store):
+    tenant_id = uuid4()
+    artifact_key = store.allocate_input_key(tenant_id)
+
+    def missing_object(**_kwargs):
+        raise ClientError(
+            {"Error": {"Code": "NoSuchKey", "Message": "missing"}},
+            "GetObject",
+        )
+
+    store.client.get_object = missing_object
+
+    with pytest.raises(ArtifactNotFoundError):
+        store.get_bytes(tenant_id, artifact_key)
 
 
 def test_competence_artifact_keys_are_content_addressed_and_exactly_scoped(store):

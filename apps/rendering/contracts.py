@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Literal
 
 from ninja import Schema
-from pydantic import ConfigDict, field_validator
+from pydantic import ConfigDict, field_validator, model_validator
 
 
 class StrictSchema(Schema):
@@ -52,3 +52,43 @@ class RenderResponse(StrictSchema):
     renderer: Literal["plantuml", "diagrams"]
     renderer_version: str
     artifact: RenderArtifact
+
+
+class RenderDescriptorRequest(StrictSchema):
+    contract: Literal["theorem.rendering.v1"] = "theorem.rendering.v1"
+    renderer: Literal["plantuml", "diagrams"]
+    artifact_id: str
+    artifact_key: str
+    payload_digest: str
+    content_type: Literal["image/svg+xml", "image/png"]
+
+    @field_validator("artifact_id", "artifact_key", "payload_digest")
+    @classmethod
+    def identity_is_bounded(cls, value: str) -> str:
+        if not value.strip() or len(value) > 512 or any(
+            character in value for character in ("\n", "\r", "\0")
+        ):
+            raise ValueError("artifact identity is malformed")
+        return value
+
+    @model_validator(mode="after")
+    def renderer_and_media_type_agree(self):
+        if self.renderer == "plantuml" and self.content_type != "image/svg+xml":
+            raise ValueError("PlantUML descriptors require SVG content")
+        return self
+
+
+class RefreshedRenderArtifact(StrictSchema):
+    artifact_id: str
+    artifact_key: str
+    payload_digest: str
+    content_type: Literal["image/svg+xml", "image/png"]
+    byte_length: int
+    download_url: str
+    expires_at_ms: int
+
+
+class RenderDescriptorResponse(StrictSchema):
+    contract: Literal["theorem.rendering.v1"] = "theorem.rendering.v1"
+    renderer: Literal["plantuml", "diagrams"]
+    artifact: RefreshedRenderArtifact
