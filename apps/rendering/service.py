@@ -12,6 +12,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from django.conf import settings
@@ -129,13 +130,42 @@ def _run(command: list[str], *, stdin: bytes, cwd: str | None = None) -> bytes:
         return stdout
 
 
-def _validate_svg(payload: bytes) -> None:
+def _validate_svg(payload: bytes) -> ET.Element:
     lowered = payload.lower()
     if b"<svg" not in lowered[:1_000] or any(
         forbidden in lowered
         for forbidden in (b"<script", b"<foreignobject", b"javascript:")
     ):
         raise RenderExecutionError("renderer returned unsafe SVG")
+    try:
+        root = ET.fromstring(payload)
+    except ET.ParseError as exc:
+        raise RenderExecutionError("renderer returned malformed SVG") from exc
+    if root.tag.rsplit("}", 1)[-1] != "svg":
+        raise RenderExecutionError("renderer returned malformed SVG")
+    return root
+
+
+def _is_plantuml_diagnostic_svg(root: ET.Element) -> bool:
+    """Recognize PlantUML's untyped, bold-red renderer error document."""
+
+    if root.attrib.get("data-diagram-type"):
+        return False
+    for element in root.iter():
+        if element.tag.rsplit("}", 1)[-1] != "text":
+            continue
+        if element.attrib.get("fill", "").upper() != "#FF0000":
+            continue
+        if element.attrib.get("font-weight") != "700":
+            continue
+        message = "".join(element.itertext()).strip().casefold()
+        if (
+            message == "cannot open url"
+            or message.startswith("cannot include")
+            or message == "syntax error?"
+        ):
+            return True
+    return False
 
 
 def _sha256_file(path: Path) -> str:
@@ -199,13 +229,9 @@ def render_plantuml(source: str) -> tuple[bytes, str, str]:
         ],
         stdin=encoded,
     )
-    _validate_svg(payload)
-    lowered = payload.lower()
-    if any(
-        marker in lowered
-        for marker in (b"cannot open url", b"cannot include ", b"syntax error?")
-    ):
-        raise RenderExecutionError("PlantUML returned an error SVG")
+    root = _validate_svg(payload)
+    if _is_plantuml_diagnostic_svg(root):
+        raise RenderExecutionError("PlantUML returned a diagnostic SVG")
     return payload, "image/svg+xml", version
 
 

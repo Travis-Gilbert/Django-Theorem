@@ -6,14 +6,22 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import os
+import re
+import secrets
 import shutil
-import signal
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from urllib.parse import urlparse
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+if str(REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPOSITORY_ROOT))
+
+from apps.rendering.oracle_process import BoundedProcessError  # noqa: E402
+from apps.rendering.oracle_process import run_bounded_process  # noqa: E402
+
 PLANTUML_SHA256 = (
     "89948f14c93756c7a3fb7b69078ff37e8489fd79dd430c582b931e2f65358690"
 )
@@ -33,8 +41,33 @@ RUNTIME_NAMES = (
     "container",
     "orbctl",
 )
-BUILD_CLIENTS = {"docker", "podman", "finch", "nerdctl", "container"}
-HELPER_ONLY = {"colima", "limactl", "lima", "orbctl"}
+BUILD_CLIENTS = {"docker"}
+DOCKERIGNORE_REQUIRED_PATTERNS = (
+    ".git",
+    ".git/**",
+    ".env",
+    ".env*",
+    ".env.*",
+    "!.env.example",
+    ".venv/",
+    "venv/",
+    "**/__pycache__/",
+    "*.py[cod]",
+    ".pytest_cache/",
+    ".mypy_cache/",
+    ".ruff_cache/",
+    ".coverage",
+    "htmlcov/",
+    "*.sqlite3",
+    "media/",
+    "logs/",
+    "tmp/",
+    "*.log",
+    "build/",
+    "dist/",
+    "*.pem",
+    "*.key",
+)
 
 
 class ContainerOracleError(RuntimeError):
@@ -51,6 +84,7 @@ class RuntimeCandidate:
     executable: str | None
     status: str
     detail: str
+    endpoint: str | None = None
 
 
 def _minimal_environment() -> dict[str, str]:
@@ -68,45 +102,56 @@ def _run_bounded(
     cwd: Path | None = None,
     check: bool = True,
 ) -> tuple[int, str]:
-    with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
-        process = subprocess.Popen(
+    try:
+        result = run_bounded_process(
             command,
+            environment=_minimal_environment(),
+            timeout_seconds=timeout_seconds,
+            output_max_bytes=PROCESS_OUTPUT_MAX_BYTES,
             cwd=cwd,
-            env=_minimal_environment(),
-            stdin=subprocess.DEVNULL,
-            stdout=stdout_file,
-            stderr=stderr_file,
-            start_new_session=True,
+            check=check,
         )
-        try:
-            process.wait(timeout=timeout_seconds)
-        except subprocess.TimeoutExpired as exc:
-            os.killpg(process.pid, signal.SIGKILL)
-            process.wait()
-            raise ContainerOracleError(
-                f"runtime command exceeded {timeout_seconds:g}s: {command[0]}"
-            ) from exc
-        stdout_size = os.fstat(stdout_file.fileno()).st_size
-        stderr_size = os.fstat(stderr_file.fileno()).st_size
-        if max(stdout_size, stderr_size) > PROCESS_OUTPUT_MAX_BYTES:
-            raise ContainerOracleError("runtime command output exceeded its cap")
-        stdout_file.seek(0)
-        stderr_file.seek(0)
-        stdout = stdout_file.read().decode("utf-8", errors="replace")
-        stderr = stderr_file.read().decode("utf-8", errors="replace")
-    output = "\n".join(part for part in (stdout.strip(), stderr.strip()) if part)
-    if check and process.returncode != 0:
-        raise ContainerOracleError(
-            f"runtime command failed ({process.returncode}): {' '.join(command)}\n"
-            f"{output[-4000:]}"
-        )
-    return process.returncode, output
+    except BoundedProcessError as exc:
+        raise ContainerOracleError(str(exc)) from exc
+    return result.returncode, result.output
 
 
-def _status_command(name: str, executable: str) -> list[str]:
-    if name == "container":
-        return [executable, "system", "status"]
-    return [executable, "info"]
+def require_local_runtime_endpoint(endpoint: str) -> str:
+    parsed = urlparse(endpoint)
+    if (
+        parsed.scheme != "unix"
+        or parsed.netloc
+        or not parsed.path.startswith("/")
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ContainerOraclePrerequisiteError(
+            f"runtime endpoint must be a local Unix socket, not {endpoint!r}"
+        )
+    return parsed.path
+
+
+def _docker_endpoint(executable: str) -> str:
+    configured = os.environ.get("DOCKER_HOST", "").strip()
+    if configured:
+        return configured
+    status, output = _run_bounded(
+        [
+            executable,
+            "context",
+            "inspect",
+            "--format",
+            "{{.Endpoints.docker.Host}}",
+        ],
+        timeout_seconds=5.0,
+        check=False,
+    )
+    if status != 0 or len(output.splitlines()) != 1:
+        raise ContainerOraclePrerequisiteError(
+            "Docker current-context endpoint could not be resolved"
+        )
+    return output.strip()
 
 
 def inspect_runtime_candidates() -> tuple[RuntimeCandidate, ...]:
@@ -130,18 +175,26 @@ def inspect_runtime_candidates() -> tuple[RuntimeCandidate, ...]:
                 RuntimeCandidate(name, executable, "unusable", version or "version failed")
             )
             continue
-        if name in HELPER_ONLY:
+        if name not in BUILD_CLIENTS:
             inventory.append(
                 RuntimeCandidate(
                     name,
                     executable,
-                    "helper-only",
-                    f"{version}; no image build client was found",
+                    "prerequisite-only",
+                    f"{version}; locality-safe execution is not implemented",
                 )
             )
             continue
+        try:
+            endpoint = _docker_endpoint(executable)
+            require_local_runtime_endpoint(endpoint)
+        except ContainerOracleError as exc:
+            inventory.append(
+                RuntimeCandidate(name, executable, "remote-refused", str(exc))
+            )
+            continue
         status, detail = _run_bounded(
-            _status_command(name, executable),
+            [executable, "--host", endpoint, "info"],
             timeout_seconds=PROCESS_TIMEOUT_SECONDS,
             check=False,
         )
@@ -151,6 +204,7 @@ def inspect_runtime_candidates() -> tuple[RuntimeCandidate, ...]:
                 executable,
                 "usable" if status == 0 else "daemon-unavailable",
                 f"{version}; {detail}".strip("; "),
+                endpoint,
             )
         )
     return tuple(inventory)
@@ -159,6 +213,11 @@ def inspect_runtime_candidates() -> tuple[RuntimeCandidate, ...]:
 def select_runtime(inventory: tuple[RuntimeCandidate, ...]) -> RuntimeCandidate:
     for candidate in inventory:
         if candidate.name in BUILD_CLIENTS and candidate.status == "usable":
+            if candidate.endpoint is None:
+                raise ContainerOraclePrerequisiteError(
+                    "usable runtime did not record a local endpoint"
+                )
+            require_local_runtime_endpoint(candidate.endpoint)
             return candidate
     detail = "; ".join(
         f"{candidate.name}={candidate.status}" for candidate in inventory
@@ -206,26 +265,95 @@ def verify_declared_requirements(path: Path) -> None:
         )
 
 
+def verify_dockerignore(path: Path) -> None:
+    try:
+        entries = {
+            line.strip()
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        }
+    except OSError as exc:
+        raise ContainerOracleError(f"cannot read .dockerignore: {exc}") from exc
+    missing = [value for value in DOCKERIGNORE_REQUIRED_PATTERNS if value not in entries]
+    if missing:
+        raise ContainerOracleError(
+            ".dockerignore is missing required secret/state exclusions: "
+            + ", ".join(missing)
+        )
+
+
+def parse_graphviz_version(output: str) -> str:
+    line = output.strip()
+    match = re.fullmatch(
+        r"(?:dot - )?graphviz version (?P<version>[0-9]+(?:\.[0-9]+)+)(?: \([^)]*\))?",
+        line,
+    )
+    if match is None:
+        raise ContainerOracleError(f"malformed Graphviz identity: {line!r}")
+    return match.group("version")
+
+
+def parse_java_version(output: str) -> str:
+    line = output.splitlines()[0].strip() if output.strip() else ""
+    match = re.fullmatch(
+        r'(?:openjdk|java) version "(?P<version>[^"]+)"(?: .*)?',
+        line,
+    )
+    if match is None:
+        raise ContainerOracleError(f"malformed Java identity: {line!r}")
+    return match.group("version")
+
+
 def container_probe_script() -> str:
     return f"""set -eu
 # Graphviz 2.42.2
-dot_identity=$(dot -V 2>&1)
-case "$dot_identity" in *"graphviz version 2.42.2"*) ;; *) echo "$dot_identity" >&2; exit 31;; esac
-
 # pygraphviz==2.0.1 and diagrams==0.25.1
 python - <<'PY'
 import importlib.metadata
+import os
+import re
+import shutil
+import subprocess
 from pygraphviz import _graphviz
+
+dot = shutil.which("dot")
+assert dot is not None and os.access(dot, os.X_OK)
+dot_identity = subprocess.check_output(
+    [dot, "-V"], stderr=subprocess.STDOUT, text=True
+).strip()
+match = re.fullmatch(
+    r"(?:dot - )?graphviz version (?P<version>[0-9]+(?:\\.[0-9]+)+)(?: \\([^)]*\\))?",
+    dot_identity,
+)
+assert match is not None
+version = match.group("version")
+assert version == '2.42.2'
+linked_version = ".".join(
+    str(value)
+    for value in (
+        _graphviz.GRAPHVIZ_MAJOR_VERSION,
+        _graphviz.GRAPHVIZ_MINOR_VERSION,
+        _graphviz.GRAPHVIZ_PATCH_VERSION,
+    )
+)
+assert linked_version == version
 assert importlib.metadata.version("pygraphviz") == "2.0.1"
 assert importlib.metadata.version("diagrams") == "0.25.1"
-assert (_graphviz.GRAPHVIZ_MAJOR_VERSION, _graphviz.GRAPHVIZ_MINOR_VERSION, _graphviz.GRAPHVIZ_PATCH_VERSION) == (2, 42, 2)
+
+java_identity = subprocess.check_output(
+    ["java", "-version"], stderr=subprocess.STDOUT, text=True
+).splitlines()[0]
+match = re.fullmatch(
+    r'(?:openjdk|java) version "(?P<version>[^"]+)"(?: .*)?',
+    java_identity,
+)
+assert match is not None
+version = match.group("version")
+assert version == '17.0.20'
 print("pygraphviz==2.0.1 diagrams==0.25.1")
 PY
 
 # OpenJDK 17.0.20
-java_identity=$(java -version 2>&1)
-case "$java_identity" in *'17.0.20'*) ;; *) echo "$java_identity" >&2; exit 32;; esac
-
 echo '{PLANTUML_SHA256}  /opt/plantuml/plantuml.jar' | sha256sum -c -
 plantuml_identity=$(java -jar /opt/plantuml/plantuml.jar -version)
 # PlantUML version 1.2026.6
@@ -259,66 +387,181 @@ PY
 """
 
 
-def _build_command(runtime: RuntimeCandidate, image_tag: str) -> list[str]:
+def _runtime_command(runtime: RuntimeCandidate, *arguments: str) -> list[str]:
     assert runtime.executable is not None
-    return [runtime.executable, "build", "-f", "Dockerfile", "-t", image_tag, "."]
+    assert runtime.endpoint is not None
+    return [runtime.executable, "--host", runtime.endpoint, *arguments]
+
+
+def _build_command(
+    runtime: RuntimeCandidate, image_tag: str, image_id_path: Path
+) -> list[str]:
+    return _runtime_command(
+        runtime,
+        "build",
+        "-f",
+        "Dockerfile",
+        "--iidfile",
+        str(image_id_path),
+        "-t",
+        image_tag,
+        ".",
+    )
 
 
 def _run_command(runtime: RuntimeCandidate, image_tag: str) -> list[str]:
-    assert runtime.executable is not None
-    return [
-        runtime.executable,
+    return _runtime_command(
+        runtime,
         "run",
         "--rm",
         image_tag,
         "/bin/sh",
         "-lc",
         container_probe_script(),
-    ]
+    )
 
 
 def _remove_command(runtime: RuntimeCandidate, image_tag: str) -> list[str]:
-    assert runtime.executable is not None
-    return [runtime.executable, "image", "rm", image_tag]
+    return _runtime_command(runtime, "image", "rm", image_tag)
+
+
+def new_image_tag(context_digest: str) -> str:
+    return (
+        f"theorem-rendering-oracle:{context_digest[:16]}-"
+        f"{secrets.token_hex(16)}"
+    )
+
+
+def inspect_image_id(runtime: RuntimeCandidate, image_tag: str) -> str | None:
+    status, output = _run_bounded(
+        _runtime_command(
+            runtime, "image", "inspect", "--format", "{{.Id}}", image_tag
+        ),
+        timeout_seconds=PROCESS_TIMEOUT_SECONDS,
+        cwd=REPOSITORY_ROOT,
+        check=False,
+    )
+    if status != 0:
+        lowered = output.casefold()
+        if any(
+            marker in lowered
+            for marker in ("no such image", "no such object", "not found")
+        ):
+            return None
+        raise ContainerOracleError(
+            f"could not inspect helper image tag {image_tag}: {output[-4000:]}"
+        )
+    identity = output.strip()
+    if re.fullmatch(r"sha256:[0-9a-f]{64}", identity) is None:
+        raise ContainerOracleError(f"runtime returned malformed image ID: {identity!r}")
+    return identity
+
+
+def reserve_image_tag(runtime: RuntimeCandidate, image_tag: str) -> None:
+    if inspect_image_id(runtime, image_tag) is not None:
+        raise ContainerOracleError(f"refusing pre-existing image tag: {image_tag}")
+
+
+def _read_created_image_id(path: Path) -> str:
+    try:
+        identity = path.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise ContainerOracleError(f"build did not record its image ID: {exc}") from exc
+    if re.fullmatch(r"sha256:[0-9a-f]{64}", identity) is None:
+        raise ContainerOracleError(f"build recorded malformed image ID: {identity!r}")
+    return identity
+
+
+def cleanup_created_image(
+    runtime: RuntimeCandidate, image_tag: str, created_image_id: str
+) -> None:
+    current_image_id = inspect_image_id(runtime, image_tag)
+    if current_image_id != created_image_id:
+        raise ContainerOracleError(
+            f"image tag ownership changed; refusing cleanup for {image_tag}"
+        )
+    status, output = _run_bounded(
+        _remove_command(runtime, image_tag),
+        timeout_seconds=PROCESS_TIMEOUT_SECONDS,
+        cwd=REPOSITORY_ROOT,
+        check=False,
+    )
+    if status != 0:
+        raise ContainerOracleError(
+            f"helper-owned image cleanup failed for {image_tag}: {output[-4000:]}"
+        )
+    if inspect_image_id(runtime, image_tag) is not None:
+        raise ContainerOracleError(f"helper image survived cleanup: {image_tag}")
+
+
+def raise_after_cleanup(
+    primary_error: Exception | None, cleanup_error: Exception | None
+) -> None:
+    if primary_error is not None and cleanup_error is not None:
+        raise ContainerOracleError(
+            f"primary failure: {primary_error}; cleanup also failed: {cleanup_error}"
+        ) from primary_error
+    if primary_error is not None:
+        raise primary_error
+    if cleanup_error is not None:
+        raise cleanup_error
 
 
 def run_container_oracle(runtime: RuntimeCandidate) -> None:
+    if runtime.endpoint is None:
+        raise ContainerOraclePrerequisiteError(
+            "declared-image runtime has no recorded endpoint"
+        )
+    require_local_runtime_endpoint(runtime.endpoint)
     dockerfile = REPOSITORY_ROOT / "Dockerfile"
     verify_declared_dockerfile(dockerfile)
     verify_declared_requirements(REPOSITORY_ROOT / "requirements.txt")
+    dockerignore = REPOSITORY_ROOT / ".dockerignore"
+    verify_dockerignore(dockerignore)
     free_bytes = shutil.disk_usage(REPOSITORY_ROOT).free
     if free_bytes < MINIMUM_FREE_BYTES:
         raise ContainerOraclePrerequisiteError(
             "declared-image build requires at least 20 GiB free on the repository volume; "
             f"found {free_bytes / (1024 ** 3):.1f} GiB"
         )
-    digest = hashlib.sha256(dockerfile.read_bytes()).hexdigest()[:16]
-    image_tag = f"theorem-rendering-oracle:{digest}"
-    built = False
-    try:
-        _run_bounded(
-            _build_command(runtime, image_tag),
-            timeout_seconds=BUILD_TIMEOUT_SECONDS,
-            cwd=REPOSITORY_ROOT,
-        )
-        built = True
-        _run_bounded(
-            _run_command(runtime, image_tag),
-            timeout_seconds=PROBE_TIMEOUT_SECONDS,
-            cwd=REPOSITORY_ROOT,
-        )
-    finally:
-        if built:
-            status, output = _run_bounded(
-                _remove_command(runtime, image_tag),
-                timeout_seconds=PROCESS_TIMEOUT_SECONDS,
+    context_digest = hashlib.sha256(
+        dockerfile.read_bytes()
+        + (REPOSITORY_ROOT / "requirements.txt").read_bytes()
+        + dockerignore.read_bytes()
+    ).hexdigest()
+    image_tag = new_image_tag(context_digest)
+    reserve_image_tag(runtime, image_tag)
+    primary_error: Exception | None = None
+    cleanup_error: Exception | None = None
+    created_image_id: str | None = None
+    with tempfile.TemporaryDirectory(prefix="theorem-container-oracle-") as temporary:
+        image_id_path = Path(temporary) / "image-id"
+        try:
+            _run_bounded(
+                _build_command(runtime, image_tag, image_id_path),
+                timeout_seconds=BUILD_TIMEOUT_SECONDS,
                 cwd=REPOSITORY_ROOT,
-                check=False,
             )
-            if status != 0:
+            created_image_id = _read_created_image_id(image_id_path)
+            tagged_image_id = inspect_image_id(runtime, image_tag)
+            if tagged_image_id != created_image_id:
                 raise ContainerOracleError(
-                    f"helper-owned image cleanup failed for {image_tag}: {output}"
+                    "built image ID did not match the helper-owned tag"
                 )
+            _run_bounded(
+                _run_command(runtime, image_tag),
+                timeout_seconds=PROBE_TIMEOUT_SECONDS,
+                cwd=REPOSITORY_ROOT,
+            )
+        except Exception as exc:
+            primary_error = exc
+        finally:
+            if created_image_id is not None:
+                try:
+                    cleanup_created_image(runtime, image_tag, created_image_id)
+                except Exception as exc:
+                    cleanup_error = exc
+    raise_after_cleanup(primary_error, cleanup_error)
 
 
 def main() -> int:
@@ -329,6 +572,7 @@ def main() -> int:
     try:
         verify_declared_dockerfile(REPOSITORY_ROOT / "Dockerfile")
         verify_declared_requirements(REPOSITORY_ROOT / "requirements.txt")
+        verify_dockerignore(REPOSITORY_ROOT / ".dockerignore")
         runtime = select_runtime(inventory)
         run_container_oracle(runtime)
     except ContainerOraclePrerequisiteError as exc:

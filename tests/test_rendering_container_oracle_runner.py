@@ -59,6 +59,123 @@ def test_declared_requirements_require_exact_python_renderer_pins(tmp_path):
         runner.verify_declared_requirements(requirements)
 
 
+def test_dockerignore_contract_rejects_missing_secret_and_state_exclusions(tmp_path):
+    dockerignore = tmp_path / ".dockerignore"
+    dockerignore.write_text(".git\n.env\n", encoding="utf-8")
+
+    with pytest.raises(runner.ContainerOracleError, match=".dockerignore"):
+        runner.verify_dockerignore(dockerignore)
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    ("tcp://127.0.0.1:2375", "tcp://builder.internal:2376", "ssh://builder"),
+)
+def test_remote_runtime_endpoints_are_refused(endpoint):
+    with pytest.raises(runner.ContainerOraclePrerequisiteError, match="local Unix"):
+        runner.require_local_runtime_endpoint(endpoint)
+
+
+def test_local_unix_runtime_endpoint_is_admitted():
+    assert runner.require_local_runtime_endpoint(
+        "unix:///Users/example/.docker/run/docker.sock"
+    ) == "/Users/example/.docker/run/docker.sock"
+
+
+def test_runtime_commands_remain_bound_to_the_proven_local_endpoint(tmp_path):
+    endpoint = "unix:///Users/example/.docker/run/docker.sock"
+    runtime = runner.RuntimeCandidate(
+        "docker", "/usr/local/bin/docker", "usable", "local", endpoint
+    )
+
+    command = runner._build_command(runtime, "oracle:tag", tmp_path / "image-id")
+
+    assert command[:3] == ["/usr/local/bin/docker", "--host", endpoint]
+    assert "--iidfile" in command
+
+
+@pytest.mark.parametrize(
+    ("output", "expected"),
+    (
+        ("dot - graphviz version 2.42.2 (0)", "2.42.2"),
+        ('openjdk version "17.0.20" 2026-01-20', "17.0.20"),
+    ),
+)
+def test_exact_runtime_version_parsers(output, expected):
+    parser = (
+        runner.parse_graphviz_version
+        if output.startswith("dot")
+        else runner.parse_java_version
+    )
+    assert parser(output) == expected
+
+
+def test_near_match_runtime_versions_are_not_exact():
+    assert runner.parse_graphviz_version(
+        "dot - graphviz version 2.42.20 (0)"
+    ) != "2.42.2"
+    assert runner.parse_java_version(
+        'openjdk version "17.0.200" 2026-01-20'
+    ) != "17.0.20"
+
+
+def test_per_invocation_tags_use_a_random_nonce(monkeypatch):
+    nonces = iter(("a" * 32, "b" * 32))
+    monkeypatch.setattr(runner.secrets, "token_hex", lambda _bytes: next(nonces))
+
+    first = runner.new_image_tag("contextdigest")
+    second = runner.new_image_tag("contextdigest")
+
+    assert first != second
+    assert first.endswith("-" + "a" * 32)
+    assert second.endswith("-" + "b" * 32)
+
+
+def test_preexisting_tag_is_refused_before_build(monkeypatch):
+    runtime = runner.RuntimeCandidate(
+        "docker", "/usr/local/bin/docker", "usable", "local", "unix:///tmp/docker.sock"
+    )
+    monkeypatch.setattr(
+        runner,
+        "inspect_image_id",
+        lambda _runtime, _tag: "sha256:" + "a" * 64,
+    )
+
+    with pytest.raises(runner.ContainerOracleError, match="pre-existing"):
+        runner.reserve_image_tag(runtime, "theorem-rendering-oracle:fixture")
+
+
+def test_concurrent_retag_is_not_deleted(monkeypatch):
+    runtime = runner.RuntimeCandidate(
+        "docker", "/usr/local/bin/docker", "usable", "local", "unix:///tmp/docker.sock"
+    )
+    monkeypatch.setattr(
+        runner,
+        "inspect_image_id",
+        lambda _runtime, _tag: "sha256:" + "b" * 64,
+    )
+    monkeypatch.setattr(
+        runner,
+        "_run_bounded",
+        lambda *_args, **_kwargs: pytest.fail("concurrently retagged image was deleted"),
+    )
+
+    with pytest.raises(runner.ContainerOracleError, match="ownership changed"):
+        runner.cleanup_created_image(
+            runtime,
+            "theorem-rendering-oracle:fixture",
+            "sha256:" + "a" * 64,
+        )
+
+
+def test_cleanup_failure_preserves_the_primary_failure():
+    primary = runner.ContainerOracleError("probe failed")
+    cleanup = runner.ContainerOracleError("cleanup failed")
+
+    with pytest.raises(runner.ContainerOracleError, match="probe failed.*cleanup failed"):
+        runner.raise_after_cleanup(primary, cleanup)
+
+
 def test_container_probe_covers_every_declared_runtime_assertion():
     probe = runner.container_probe_script()
 
@@ -74,3 +191,6 @@ def test_container_probe_covers_every_declared_runtime_assertion():
         "test_pinned_graphviz_cold_recompute_matches_exact_fixture_bytes",
     ):
         assert required in probe
+
+    assert "version == '2.42.2'" in probe
+    assert "version == '17.0.20'" in probe

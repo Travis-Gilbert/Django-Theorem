@@ -1,0 +1,53 @@
+# Version-control and agent/worktree metadata
+.git
+.git/**
+.github/
+.agents/
+.claude/
+.codex/
+.superpowers/
+
+# Credentials and local environment configuration
+.env
+.env*
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_ed25519
+
+# Python environments and caches
+.venv/
+venv/
+**/__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Test, coverage, and build output
+.coverage
+.coverage.*
+htmlcov/
+build/
+dist/
+target/
+node_modules/
+
+# Local application and runtime state
+*.sqlite
+*.sqlite3
+*.db
+media/
+staticfiles/
+logs/
+tmp/
+temp/
+*.log
+celerybeat-schedule
+.DS_Store

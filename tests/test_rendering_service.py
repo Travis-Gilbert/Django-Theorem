@@ -305,6 +305,68 @@ def test_plantuml_refuses_a_release_identity_mismatch(tmp_path, monkeypatch):
             render_plantuml("@startuml\nAlice -> Bob\n@enduml")
 
 
+def test_plantuml_refuses_a_structured_diagnostic_svg(tmp_path, monkeypatch):
+    jar_path = tmp_path / "plantuml.jar"
+    jar_path.write_bytes(b"reviewed")
+    diagnostic_svg = b"""\
+<svg xmlns="http://www.w3.org/2000/svg">
+  <text fill="#FF0000" font-weight="700">Cannot open URL</text>
+</svg>
+"""
+
+    def run(command, *, stdin, cwd=None):
+        if command[-1] == "-version":
+            return b"PlantUML version 1.2026.6 / fixture\n"
+        return diagnostic_svg
+
+    monkeypatch.setattr("apps.rendering.service._run", run)
+    with override_settings(
+        PLANTUML_JAR_PATH=str(jar_path),
+        PLANTUML_VERSION="1.2026.6",
+        PLANTUML_SHA256=sha256(b"reviewed").hexdigest(),
+        PLANTUML_SECURITY_PROFILE="SANDBOX",
+    ):
+        with pytest.raises(RenderExecutionError, match="diagnostic SVG"):
+            render_plantuml("@startuml\nAlice -> Bob\n@enduml")
+
+
+@pytest.mark.parametrize(
+    "ordinary_text",
+    ("Cannot include", "Cannot open URL", "Syntax Error?"),
+)
+def test_plantuml_accepts_diagnostic_phrases_in_valid_diagram_text(
+    tmp_path, monkeypatch, ordinary_text
+):
+    jar_path = tmp_path / "plantuml.jar"
+    jar_path.write_bytes(b"reviewed")
+    valid_svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" '
+        'data-diagram-type="DESCRIPTION">'
+        f'<text fill="#FF0000" font-weight="700">{ordinary_text}</text>'
+        "</svg>"
+    ).encode()
+
+    def run(command, *, stdin, cwd=None):
+        if command[-1] == "-version":
+            return b"PlantUML version 1.2026.6 / fixture\n"
+        return valid_svg
+
+    monkeypatch.setattr("apps.rendering.service._run", run)
+    with override_settings(
+        PLANTUML_JAR_PATH=str(jar_path),
+        PLANTUML_VERSION="1.2026.6",
+        PLANTUML_SHA256=sha256(b"reviewed").hexdigest(),
+        PLANTUML_SECURITY_PROFILE="SANDBOX",
+    ):
+        payload, media_type, version = render_plantuml(
+            f"@startuml\nrectangle \"{ordinary_text}\"\n@enduml"
+        )
+
+    assert payload == valid_svg
+    assert media_type == "image/svg+xml"
+    assert version == "1.2026.6"
+
+
 @pytest.mark.django_db
 def test_plantuml_renders_stores_and_presigns(rendering_client, monkeypatch):
     store = RecordingArtifactStore()

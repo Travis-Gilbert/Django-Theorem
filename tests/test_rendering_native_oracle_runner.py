@@ -91,13 +91,20 @@ def test_native_receipt_requires_content_addressed_svg_and_png():
         plantuml_version="1.2026.6",
         plantuml_sha256=runner.PLANTUML_SHA256,
         plantuml_svg_digest="sha256:" + "a" * 64,
+        plantuml_svg_key=(
+            f"tenants/{runner.NATIVE_TENANT_ID}/renders/" + "a" * 64 + ".svg"
+        ),
         plantuml_include_refusal="cannot include /etc/passwd",
         diagrams_version="0.25.1",
         graphviz_version="14.1.5",
         diagrams_svg_digest="sha256:" + "b" * 64,
         diagrams_png_digest="sha256:" + "c" * 64,
-        diagrams_svg_key="tenants/native-oracle/renders/" + "b" * 64 + ".svg",
-        diagrams_png_key="tenants/native-oracle/renders/" + "c" * 64 + ".png",
+        diagrams_svg_key=(
+            f"tenants/{runner.NATIVE_TENANT_ID}/renders/" + "b" * 64 + ".svg"
+        ),
+        diagrams_png_key=(
+            f"tenants/{runner.NATIVE_TENANT_ID}/renders/" + "c" * 64 + ".png"
+        ),
         diagrams_import_refusal="import 'os' is outside the diagrams package",
     )
 
@@ -106,4 +113,28 @@ def test_native_receipt_requires_content_addressed_svg_and_png():
     with pytest.raises(runner.NativeOracleError, match="Diagrams version"):
         runner._validate_receipt(
             runner.dataclasses.replace(receipt, diagrams_version="0.25.0")
+        )
+
+    with pytest.raises(runner.NativeOracleError, match="content key"):
+        runner._validate_receipt(
+            runner.dataclasses.replace(
+                receipt,
+                plantuml_svg_key=(
+                    "tenants/00000000-0000-0000-0000-000000000099/renders/"
+                    + "a" * 64
+                    + ".svg"
+                ),
+            )
+        )
+
+    with pytest.raises(runner.NativeOracleError, match="content key"):
+        runner._validate_receipt(
+            runner.dataclasses.replace(
+                receipt,
+                diagrams_svg_key=(
+                    f"tenants/{runner.NATIVE_TENANT_ID}/renders/"
+                    + "c" * 64
+                    + ".svg"
+                ),
+            )
         )

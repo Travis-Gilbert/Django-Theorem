@@ -9,7 +9,6 @@ import json
 import os
 import re
 import shutil
-import signal
 import subprocess
 import sys
 import tarfile
@@ -21,6 +20,9 @@ from uuid import UUID
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
+
+from apps.rendering.oracle_process import BoundedProcessError  # noqa: E402
+from apps.rendering.oracle_process import run_bounded_process  # noqa: E402
 
 PLANTUML_VERSION = "1.2026.6"
 PLANTUML_SHA256 = (
@@ -63,6 +65,7 @@ class NativeReceipt:
     plantuml_version: str
     plantuml_sha256: str
     plantuml_svg_digest: str
+    plantuml_svg_key: str
     plantuml_include_refusal: str
     diagrams_version: str
     graphviz_version: str
@@ -125,39 +128,17 @@ def _run_checked(
     timeout_seconds: float,
     cwd: Path | None = None,
 ) -> str:
-    with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
-        process = subprocess.Popen(
+    try:
+        result = run_bounded_process(
             command,
+            environment=environment,
+            timeout_seconds=timeout_seconds,
+            output_max_bytes=PROCESS_OUTPUT_MAX_BYTES,
             cwd=cwd,
-            env=environment,
-            stdin=subprocess.DEVNULL,
-            stdout=stdout_file,
-            stderr=stderr_file,
-            start_new_session=True,
         )
-        try:
-            process.wait(timeout=timeout_seconds)
-        except subprocess.TimeoutExpired as exc:
-            os.killpg(process.pid, signal.SIGKILL)
-            process.wait()
-            raise NativeOracleError(
-                f"process exceeded {timeout_seconds:g}s: {command[0]}"
-            ) from exc
-        stdout_size = os.fstat(stdout_file.fileno()).st_size
-        stderr_size = os.fstat(stderr_file.fileno()).st_size
-        if max(stdout_size, stderr_size) > PROCESS_OUTPUT_MAX_BYTES:
-            raise NativeOracleError(f"process output exceeded cap: {command[0]}")
-        stdout_file.seek(0)
-        stderr_file.seek(0)
-        stdout = stdout_file.read().decode("utf-8", errors="replace")
-        stderr = stderr_file.read().decode("utf-8", errors="replace")
-    combined = "\n".join(part for part in (stdout.strip(), stderr.strip()) if part)
-    if process.returncode != 0:
-        raise NativeOracleError(
-            f"process failed ({process.returncode}): {' '.join(command)}\n"
-            f"{combined[-4000:]}"
-        )
-    return combined
+    except BoundedProcessError as exc:
+        raise NativeOracleError(str(exc)) from exc
+    return result.output
 
 
 def _extract_graphviz(archive: Path, destination: Path) -> Path:
@@ -257,7 +238,10 @@ def _build_graphviz(temporary_root: Path) -> tuple[Path, str]:
         environment=identity_environment,
         timeout_seconds=5.0,
     )
-    match = re.search(r"graphviz version (?P<version>[0-9.]+)", identity)
+    match = re.fullmatch(
+        r"(?:dot - )?graphviz version (?P<version>[0-9]+(?:\.[0-9]+)+)(?: \([^)]*\))?",
+        identity,
+    )
     if match is None or match.group("version") != GRAPHVIZ_NATIVE_VERSION:
         raise NativeOracleError(f"Graphviz reported unexpected identity: {identity!r}")
     return prefix / "bin", match.group("version")
@@ -291,11 +275,16 @@ def _validate_receipt(receipt: NativeReceipt) -> None:
         if re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None:
             raise NativeOracleError(f"{label} digest is malformed")
     for digest, key, extension in (
+        (receipt.plantuml_svg_digest, receipt.plantuml_svg_key, "svg"),
         (receipt.diagrams_svg_digest, receipt.diagrams_svg_key, "svg"),
         (receipt.diagrams_png_digest, receipt.diagrams_png_key, "png"),
     ):
-        if not key.endswith(f"/{digest.removeprefix('sha256:')}.{extension}"):
-            raise NativeOracleError("Diagrams content key does not match its bytes")
+        expected_key = (
+            f"tenants/{NATIVE_TENANT_ID}/renders/"
+            f"{digest.removeprefix('sha256:')}.{extension}"
+        )
+        if key != expected_key:
+            raise NativeOracleError("renderer content key does not match its bytes")
     if "cannot include /etc/passwd" not in receipt.plantuml_include_refusal.lower():
         raise NativeOracleError("PlantUML local-include refusal was not proven")
     if "'os'" not in receipt.diagrams_import_refusal:
@@ -309,7 +298,6 @@ def _execute_native_oracles(temporary_root: Path) -> NativeReceipt:
 
     django.setup()
 
-    from apps.orchestration.artifacts import sha256_digest
     from apps.rendering.service import (
         RenderExecutionError,
         render_diagrams,
@@ -374,13 +362,15 @@ def _execute_native_oracles(temporary_root: Path) -> NativeReceipt:
         else:
             raise NativeOracleError("Diagrams admitted a forbidden import")
 
+    plantuml_digest, plantuml_key = _content_key(first_plantuml, "svg")
     svg_digest, svg_key = _content_key(svg_first, "svg")
     png_digest, png_key = _content_key(png_first, "png")
     receipt = NativeReceipt(
         java_identity=java_identity,
         plantuml_version=plantuml_version,
         plantuml_sha256=PLANTUML_SHA256,
-        plantuml_svg_digest=sha256_digest(first_plantuml),
+        plantuml_svg_digest=plantuml_digest,
+        plantuml_svg_key=plantuml_key,
         plantuml_include_refusal=plantuml_include_refusal,
         diagrams_version=diagrams_version,
         graphviz_version=graphviz_version,
