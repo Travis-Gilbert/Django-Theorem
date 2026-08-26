@@ -142,7 +142,8 @@ def test_cache_degrades_to_bounded_process_memory_when_valkey_fails(monkeypatch)
         def get(self, _key):
             raise OSError("Valkey read unavailable")
 
-        def setex(self, _key, _ttl, _value):
+        def set(self, _key, _value, *, ex):
+            assert ex > 0
             raise OSError("Valkey write unavailable")
 
     monkeypatch.setattr("apps.layout.cache._redis_client", lambda: FailingClient())
@@ -216,6 +217,7 @@ def test_policy_is_data_driven_and_dot_is_canonical():
     assert forward == backward
     assert 'height="0.6666666666666666"' in forward
     assert 'width="1.6666666666666667"' in forward
+    assert 'constraint="false", id="e01", label=""' in forward
     assert '{ rank=same; "W01"; "V01"; }' in forward
     assert {row.engine for row in POLICIES.values()} == {
         "dot",
@@ -225,6 +227,23 @@ def test_policy_is_data_driven_and_dot_is_canonical():
         "circo",
         "osage",
     }
+
+
+def test_plan_dependency_from_verifier_does_not_merge_the_next_work_rank():
+    payload = request_payload()
+    payload["nodes"].append({"id": "W02", "w_px": 120, "h_px": 48, "kind": "work"})
+    payload["edges"].append(
+        {"id": "e02", "from": "V01", "to": "W02", "kind": "dependency"}
+    )
+    body = LayoutRequest.model_validate(payload)
+    _, policy, focus_id = resolve_policy(
+        body.graph_class, body.nodes, body.edges, body.params
+    )
+
+    dot = canonical_dot(body.nodes, body.edges, policy, focus_id=focus_id)
+
+    assert '{ rank=same; "W01"; "V01"; }' in dot
+    assert '{ rank=same; "W02"; "V01"; }' not in dot
 
 
 def test_absent_graph_class_uses_structural_classifier():

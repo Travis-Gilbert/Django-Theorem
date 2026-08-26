@@ -19,6 +19,7 @@ class LayoutPolicy:
     verify_sibling_ranks: bool = False
     cluster_nodes: bool = False
     focus_root: bool = False
+    nonconstraining_edge_kinds: frozenset[str] = frozenset()
 
     def engine_for(self, node_count: int) -> str:
         if (
@@ -40,6 +41,7 @@ POLICIES: Mapping[GraphClass, LayoutPolicy] = MappingProxyType(
             "dot",
             _attrs(rankdir="LR", ranksep="0.75", nodesep="0.35"),
             verify_sibling_ranks=True,
+            nonconstraining_edge_kinds=frozenset({"verifies"}),
         ),
         "derivation": LayoutPolicy("dot", _attrs(rankdir="LR")),
         "query_plan": LayoutPolicy("dot", _attrs(rankdir="LR")),

@@ -25,7 +25,13 @@ LIVE_MACHINE_KEY = os.environ.get("THEOREM_LAYOUT_RENDERING_LIVE_MACHINE_KEY", "
 LIVE_ENABLED = bool(LIVE_BASE_URL and LIVE_MACHINE_KEY)
 LIVE_SKIP = "set THEOREM_LAYOUT_RENDERING_LIVE_BASE_URL and _MACHINE_KEY"
 LIVE_VALKEY_URL = os.environ.get("THEOREM_LAYOUT_LIVE_VALKEY_URL", "")
-CHAT_PLAN_FIXTURE = os.environ.get("THEOREM_CHAT_PLAN_LAYOUT_FIXTURE", "")
+CHAT_PLAN_FIXTURE = Path(
+    os.environ.get(
+        "THEOREM_CHAT_PLAN_LAYOUT_FIXTURE",
+        Path(__file__).resolve().parents[1]
+        / "contracts/theorem.layout.v1.agent-chat-plan.fixture.json",
+    )
+)
 
 
 def _post(path: str, payload: dict) -> httpx.Response:
@@ -112,12 +118,9 @@ def test_real_valkey_cache_matches_a_cold_recompute():
 
 
 @pytest.mark.live
-@pytest.mark.skipif(
-    not (LIVE_ENABLED and CHAT_PLAN_FIXTURE),
-    reason="set deployed credentials and THEOREM_CHAT_PLAN_LAYOUT_FIXTURE",
-)
+@pytest.mark.skipif(not LIVE_ENABLED, reason=LIVE_SKIP)
 def test_real_chat_plan_board_reads_left_to_right_with_verify_siblings():
-    fixture = json.loads(Path(CHAT_PLAN_FIXTURE).read_text(encoding="utf-8"))
+    fixture = json.loads(CHAT_PLAN_FIXTURE.read_text(encoding="utf-8"))
     payload = fixture.get("layout_request", fixture)
     assert len(payload["nodes"]) == 31
     assert len(payload["edges"]) == 44

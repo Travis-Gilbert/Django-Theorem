@@ -36,6 +36,8 @@ def _verification_rank_groups(
     kinds = {node.id: node.kind.lower() for node in nodes}
     groups: set[tuple[str, str]] = set()
     for edge in edges:
+        if edge.kind != "verifies":
+            continue
         left_kind = kinds[edge.from_]
         right_kind = kinds[edge.to]
         if left_kind in {"work", "implementation"} and right_kind in {
@@ -88,10 +90,13 @@ def canonical_dot(
             lines.append(f"  {_node_statement(node)}")
 
     for edge in sorted(edges, key=lambda item: (item.from_, item.to, item.id)):
-        lines.append(
-            f"  {_quote(edge.from_)} -> {_quote(edge.to)} "
-            f"[id={_quote(edge.id)}, label={_quote('')}];"
+        attributes = {"id": edge.id, "label": ""}
+        if edge.kind in policy.nonconstraining_edge_kinds:
+            attributes["constraint"] = "false"
+        rendered = ", ".join(
+            f"{key}={_quote(value)}" for key, value in sorted(attributes.items())
         )
+        lines.append(f"  {_quote(edge.from_)} -> {_quote(edge.to)} [{rendered}];")
 
     if policy.verify_sibling_ranks:
         for work_id, verify_id in _verification_rank_groups(nodes, edges):

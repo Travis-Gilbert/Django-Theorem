@@ -62,7 +62,7 @@ def set_cached_response(tenant_slug: str, digest_hex: str, value: bytes) -> None
     client = _redis_client()
     if client is not None:
         try:
-            client.setex(key, ttl, value)
+            client.set(key, value, ex=ttl)
             return
         except Exception as exc:  # noqa: BLE001 - cache failure must not fail layout
             logger.warning("layout cache write failed; using process memory: %s", exc)

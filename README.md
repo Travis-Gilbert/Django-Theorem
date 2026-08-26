@@ -237,11 +237,25 @@ THEOREM_LAYOUT_RENDERING_LIVE_MACHINE_KEY=thk_... \
 pytest -q -m live tests/test_layout_rendering_live.py
 ```
 
-Two additional live gates are opt-in: set `THEOREM_LAYOUT_LIVE_VALKEY_URL`
-to prove real cache bytes equal a cold recompute, and set
-`THEOREM_CHAT_PLAN_LAYOUT_FIXTURE` to the uncommitted real 31-node/44-edge
-board JSON while supplying the deployed URL/key above. Neither gate accepts the
+The exact 31-node/44-edge Agent Chat board is committed as
+`contracts/theorem.layout.v1.agent-chat-plan.fixture.json` and is the default
+deployed board input. `THEOREM_CHAT_PLAN_LAYOUT_FIXTURE` may override that path
+for an explicitly versioned successor. Set `THEOREM_LAYOUT_LIVE_VALKEY_URL` to
+run the separate deployed Valkey cache oracle. Neither gate accepts the
 two-node wire fixture as a substitute.
+
+Run the bounded local oracles with:
+
+```bash
+.venv/bin/pytest -q tests/test_layout_local_oracles.py
+```
+
+That focused module starts the installed `valkey-server` on a dynamically
+selected loopback port with a temporary data directory and always terminates
+it. The artifact-store case is skipped unless all
+`THEOREM_LAYOUT_LOCAL_S3_*` variables point to an actual loopback
+S3-compatible process; it uses `ArtifactStore.from_settings()` and refuses a
+non-loopback endpoint rather than falling back to a mock or hosted service.
 
 ## RunPod and R execution contract
 
