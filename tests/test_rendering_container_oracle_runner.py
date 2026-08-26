@@ -79,6 +79,55 @@ def test_checked_in_dockerignore_is_the_canonical_security_contract():
     assert declared == runner.DOCKERIGNORE_REQUIRED_PATTERNS
 
 
+def test_dockerignore_verifier_accepts_only_the_exact_reviewed_policy(tmp_path):
+    dockerignore = tmp_path / ".dockerignore"
+    dockerignore.write_text(
+        "\n".join(runner.DOCKERIGNORE_REQUIRED_PATTERNS) + "\n",
+        encoding="utf-8",
+    )
+
+    runner.verify_dockerignore(dockerignore)
+
+
+@pytest.mark.parametrize(
+    "weakening_rule",
+    ("!private-signing.key", "!.env.production"),
+)
+def test_dockerignore_verifier_rejects_appended_weakening_negations(
+    tmp_path, weakening_rule
+):
+    dockerignore = tmp_path / ".dockerignore"
+    dockerignore.write_text(
+        "\n".join((*runner.DOCKERIGNORE_REQUIRED_PATTERNS, weakening_rule)) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(runner.ContainerOracleError, match="exact reviewed policy"):
+        runner.verify_dockerignore(dockerignore)
+
+
+def test_dockerignore_verifier_rejects_duplicate_entries(tmp_path):
+    dockerignore = tmp_path / ".dockerignore"
+    dockerignore.write_text(
+        "\n".join((*runner.DOCKERIGNORE_REQUIRED_PATTERNS, ".git")) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(runner.ContainerOracleError, match="exact reviewed policy"):
+        runner.verify_dockerignore(dockerignore)
+
+
+def test_dockerignore_verifier_rejects_semantic_reordering(tmp_path):
+    reordered = list(runner.DOCKERIGNORE_REQUIRED_PATTERNS)
+    safe_example = reordered.pop(reordered.index("!.env.example"))
+    reordered.insert(reordered.index(".env"), safe_example)
+    dockerignore = tmp_path / ".dockerignore"
+    dockerignore.write_text("\n".join(reordered) + "\n", encoding="utf-8")
+
+    with pytest.raises(runner.ContainerOracleError, match="exact reviewed policy"):
+        runner.verify_dockerignore(dockerignore)
+
+
 @pytest.mark.parametrize("missing_pattern", runner.DOCKERIGNORE_REQUIRED_PATTERNS)
 def test_every_dockerignore_security_pattern_is_drift_gated(
     tmp_path, missing_pattern

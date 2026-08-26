@@ -287,18 +287,17 @@ def verify_declared_requirements(path: Path) -> None:
 
 def verify_dockerignore(path: Path) -> None:
     try:
-        entries = {
+        entries = tuple(
             line.strip()
             for line in path.read_text(encoding="utf-8").splitlines()
             if line.strip() and not line.lstrip().startswith("#")
-        }
+        )
     except OSError as exc:
         raise ContainerOracleError(f"cannot read .dockerignore: {exc}") from exc
-    missing = [value for value in DOCKERIGNORE_REQUIRED_PATTERNS if value not in entries]
-    if missing:
+    if entries != DOCKERIGNORE_REQUIRED_PATTERNS:
         raise ContainerOracleError(
-            ".dockerignore is missing required secret/state exclusions: "
-            + ", ".join(missing)
+            ".dockerignore must match the exact reviewed policy; "
+            "missing, extra, duplicate, or reordered entries are refused"
         )
 
 
