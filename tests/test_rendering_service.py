@@ -457,6 +457,17 @@ def test_descriptor_refresh_reports_missing_storage_without_minting_a_url(
             "/internal/rendering/diagrams",
             {"source": SAFE_DIAGRAM, "format": "png"},
         ),
+        (
+            "/internal/rendering/descriptor",
+            {
+                "contract": "theorem.rendering.v1",
+                "renderer": "plantuml",
+                "artifact_id": "sha256:" + "a" * 64,
+                "artifact_key": "tenants/fixture/renders/" + "a" * 64 + ".svg",
+                "payload_digest": "sha256:" + "a" * 64,
+                "content_type": "image/svg+xml",
+            },
+        ),
     ],
 )
 def test_rendering_routes_require_exact_machine_scope(path, payload, db):
