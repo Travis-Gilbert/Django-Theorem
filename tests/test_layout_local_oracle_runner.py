@@ -26,14 +26,17 @@ def _write_receipt(
     tests: int,
     skipped: int,
     names: tuple[str, ...],
+    failures: int = 0,
+    errors: int = 0,
+    case_statuses: tuple[str | None, ...] = (),
 ) -> None:
     root = ET.Element("testsuites")
     suite = ET.SubElement(
         root,
         "testsuite",
         tests=str(tests),
-        failures="0",
-        errors="0",
+        failures=str(failures),
+        errors=str(errors),
         skipped=str(skipped),
     )
     for index, name in enumerate(names):
@@ -45,6 +48,8 @@ def _write_receipt(
         )
         if index < skipped:
             ET.SubElement(case, "skipped")
+        if index < len(case_statuses) and case_statuses[index] is not None:
+            ET.SubElement(case, case_statuses[index])
     ET.ElementTree(root).write(path, encoding="utf-8", xml_declaration=True)
 
 
@@ -181,6 +186,104 @@ def test_pytest_receipt_refuses_missing_malformed_or_ambiguous_receipts(
         receipt.write_text(contents, encoding="utf-8")
 
     with pytest.raises(runner.LocalOracleError):
+        runner._require_pytest_receipt(receipt)
+
+
+def test_pytest_receipt_refuses_two_direct_test_suites(tmp_path):
+    receipt = tmp_path / "receipt.xml"
+    root = ET.Element("testsuites")
+    for _ in range(2):
+        ET.SubElement(
+            root,
+            "testsuite",
+            tests="4",
+            failures="0",
+            errors="0",
+            skipped="0",
+        )
+    ET.ElementTree(root).write(receipt, encoding="utf-8", xml_declaration=True)
+
+    with pytest.raises(
+        runner.LocalOracleError,
+        match="exactly one test suite",
+    ):
+        runner._require_pytest_receipt(receipt)
+
+
+def test_pytest_receipt_refuses_duplicate_and_missing_required_identity(tmp_path):
+    receipt = tmp_path / "receipt.xml"
+    names = [node_id.rsplit("::", 1)[1] for node_id in runner.REQUIRED_TEST_NODE_IDS]
+    names[-1] = names[0]
+    _write_receipt(receipt, tests=4, skipped=0, names=tuple(names))
+
+    with pytest.raises(
+        runner.LocalOracleError,
+        match="does not identify the four required tests",
+    ):
+        runner._require_pytest_receipt(receipt)
+
+
+def test_pytest_receipt_refuses_a_wrong_test_identity(tmp_path):
+    receipt = tmp_path / "receipt.xml"
+    names = [node_id.rsplit("::", 1)[1] for node_id in runner.REQUIRED_TEST_NODE_IDS]
+    names[-1] = "test_not_a_required_local_oracle"
+    _write_receipt(receipt, tests=4, skipped=0, names=tuple(names))
+
+    with pytest.raises(
+        runner.LocalOracleError,
+        match="does not identify the four required tests",
+    ):
+        runner._require_pytest_receipt(receipt)
+
+
+@pytest.mark.parametrize(
+    ("failures", "errors", "expected_message"),
+    (
+        (1, 0, "failures=1 errors=0"),
+        (0, 1, "failures=0 errors=1"),
+    ),
+)
+def test_pytest_receipt_refuses_nonzero_failure_or_error_counters(
+    tmp_path,
+    failures,
+    errors,
+    expected_message,
+):
+    receipt = tmp_path / "receipt.xml"
+    names = tuple(
+        node_id.rsplit("::", 1)[1] for node_id in runner.REQUIRED_TEST_NODE_IDS
+    )
+    _write_receipt(
+        receipt,
+        tests=4,
+        skipped=0,
+        names=names,
+        failures=failures,
+        errors=errors,
+    )
+
+    with pytest.raises(runner.LocalOracleError, match=expected_message):
+        runner._require_pytest_receipt(receipt)
+
+
+@pytest.mark.parametrize("case_status", ("failure", "error"))
+def test_pytest_receipt_refuses_case_level_nonpass_elements(tmp_path, case_status):
+    receipt = tmp_path / "receipt.xml"
+    names = tuple(
+        node_id.rsplit("::", 1)[1] for node_id in runner.REQUIRED_TEST_NODE_IDS
+    )
+    _write_receipt(
+        receipt,
+        tests=4,
+        skipped=0,
+        names=names,
+        case_statuses=(case_status,),
+    )
+
+    with pytest.raises(
+        runner.LocalOracleError,
+        match="contains non-pass test status",
+    ):
         runner._require_pytest_receipt(receipt)
 
 
