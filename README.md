@@ -250,17 +250,24 @@ Run the complete bounded local replay with:
 .venv/bin/python scripts/run-layout-local-oracles.py
 ```
 
-The replay starts the installed `valkey-server` on a dynamically selected
-loopback port with a temporary data directory. It downloads the immutable
-official Darwin/ARM64 MinIO archive
-`minio.RELEASE.2025-09-07T16-13-09Z` into a separate temporary directory and
-checks the reviewed SHA-256 before making it executable. MinIO receives fresh
-credentials, data, config, API port, and console port for that invocation. The
-helper proves the binary and S3 server identity, runs the exact board, real
-Valkey, and production `ArtifactStore.from_settings()` tests, then requires the
-processes, ports, and temporary state to be gone. It accepts no endpoint
-argument, so moto or an operator-selected loopback service cannot receive
-real-process credit.
+Before downloading MinIO, the replay resolves `THEOREM_TEST_VALKEY_SERVER` or
+`valkey-server` on `PATH`, requires its real path to be executable, and verifies
+the `Valkey server v=<version>` identity. The exact resolved binary is then
+started on a dynamically selected loopback port with a temporary data
+directory; a missing or invalid Valkey installation is fatal rather than a
+pytest skip. The helper downloads the immutable official Darwin/ARM64 MinIO
+archive `minio.RELEASE.2025-09-07T16-13-09Z` into a separate temporary directory
+and checks the reviewed SHA-256 before making it executable. MinIO receives
+fresh credentials, data, config, API port, and console port for that invocation.
+The helper proves the binary and S3 server identity, then invokes exactly the
+four required local-oracle test node IDs in a separate allowlisted environment.
+Inherited pytest controls, plugins, credentials, hosted endpoints, MinIO
+controls, and proxy settings are not passed to either child; loopback
+`NO_PROXY` is explicit. A helper-owned JUnit receipt must identify all four
+tests with four passes, zero skips, zero failures, and zero errors before the
+success line is emitted. Finally, the helper requires the processes, ports, and
+temporary state to be gone. It accepts no endpoint argument, so moto or an
+operator-selected loopback service cannot receive real-process credit.
 
 The direct pytest module remains useful when an operator already owns a local
 S3-compatible process:

@@ -6,8 +6,10 @@ from __future__ import annotations
 import hashlib
 import os
 import platform
+import re
 import secrets
 import signal
+import shutil
 import socket
 import subprocess
 import sys
@@ -15,7 +17,9 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+import xml.etree.ElementTree as ET
 from pathlib import Path
+from typing import Mapping
 from typing import TextIO
 from uuid import uuid4
 
@@ -34,6 +38,29 @@ READINESS_TIMEOUT_SECONDS = 15.0
 PYTEST_TIMEOUT_SECONDS = 180.0
 SHUTDOWN_TIMEOUT_SECONDS = 5.0
 PORT_CLOSE_TIMEOUT_SECONDS = 3.0
+LOOPBACK_NO_PROXY = "127.0.0.1,localhost,::1"
+SYSTEM_ENVIRONMENT_ALLOWLIST = (
+    "PATH",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TZ",
+    "PYTHONIOENCODING",
+    "PYTHONUTF8",
+)
+REQUIRED_TEST_NODE_IDS = (
+    "tests/test_layout_local_oracles.py::test_plan_flow_oracle_rejects_a_collapsed_dependency_rank",
+    "tests/test_layout_local_oracles.py::test_exact_agent_chat_board_uses_plan_dag_native_layout",
+    "tests/test_layout_local_oracles.py::test_real_local_valkey_cold_warm_and_version_sensitive_keys",
+    "tests/test_layout_local_oracles.py::test_production_artifact_store_against_actual_local_s3",
+)
+EXPECTED_TEST_IDENTITIES = tuple(
+    ("tests.test_layout_local_oracles", node_id.rsplit("::", 1)[1])
+    for node_id in REQUIRED_TEST_NODE_IDS
+)
+VALKEY_VERSION_PATTERN = re.compile(
+    r"^Valkey server v=(?P<version>[0-9]+\.[0-9]+\.[0-9]+(?:[-+][^ ]+)?)\b"
+)
 
 
 class LocalOracleError(RuntimeError):
@@ -48,14 +75,122 @@ def _redact(value: str, sensitive_values: tuple[str, ...]) -> str:
     return redacted
 
 
+def _minimal_system_environment(
+    inherited: Mapping[str, str],
+    *,
+    temporary_root: Path | None = None,
+) -> dict[str, str]:
+    environment = {
+        name: inherited[name]
+        for name in SYSTEM_ENVIRONMENT_ALLOWLIST
+        if inherited.get(name)
+    }
+    environment.setdefault("PATH", os.defpath)
+    if temporary_root is not None:
+        environment["TMPDIR"] = str(temporary_root)
+    environment["NO_PROXY"] = LOOPBACK_NO_PROXY
+    environment["no_proxy"] = LOOPBACK_NO_PROXY
+    return environment
+
+
+def _resolve_valkey_executable(
+    inherited: Mapping[str, str],
+) -> tuple[Path, str]:
+    configured = inherited.get("THEOREM_TEST_VALKEY_SERVER", "").strip()
+    candidate = configured or "valkey-server"
+    resolved = shutil.which(candidate, path=inherited.get("PATH") or os.defpath)
+    if resolved is None:
+        raise LocalOracleError(
+            "a real valkey-server executable is required before local replay"
+        )
+    try:
+        executable = Path(resolved).resolve(strict=True)
+    except OSError as error:
+        raise LocalOracleError(
+            f"cannot resolve Valkey executable {resolved!r}: {error}"
+        ) from error
+    if not executable.is_file() or not os.access(executable, os.X_OK):
+        raise LocalOracleError(f"Valkey executable is not executable: {executable}")
+
+    result = subprocess.run(
+        [str(executable), "--version"],
+        capture_output=True,
+        text=True,
+        timeout=VERSION_TIMEOUT_SECONDS,
+        check=False,
+        env=_minimal_system_environment(inherited),
+    )
+    first_line = (result.stdout or result.stderr).splitlines()
+    identity = first_line[0] if first_line else ""
+    match = VALKEY_VERSION_PATTERN.match(identity)
+    if result.returncode != 0 or match is None:
+        raise LocalOracleError(
+            f"Valkey executable reported unexpected identity: {identity!r}"
+        )
+    return executable, match.group("version")
+
+
+def _build_minio_environment(
+    inherited: Mapping[str, str],
+    *,
+    temporary_root: Path,
+    access_key: str,
+    secret_key: str,
+) -> dict[str, str]:
+    environment = _minimal_system_environment(
+        inherited,
+        temporary_root=temporary_root,
+    )
+    environment.update(
+        MINIO_ROOT_USER=access_key,
+        MINIO_ROOT_PASSWORD=secret_key,
+        MINIO_BROWSER="off",
+        MINIO_UPDATE="off",
+    )
+    return environment
+
+
+def _build_pytest_environment(
+    inherited: Mapping[str, str],
+    *,
+    temporary_root: Path,
+    endpoint_url: str,
+    access_key: str,
+    secret_key: str,
+    valkey_executable: Path,
+) -> dict[str, str]:
+    environment = _minimal_system_environment(
+        inherited,
+        temporary_root=temporary_root,
+    )
+    environment.update(
+        PYTEST_DISABLE_PLUGIN_AUTOLOAD="1",
+        PYTHONDONTWRITEBYTECODE="1",
+        DJANGO_SETTINGS_MODULE="theorem_control.settings",
+        SECRET_KEY="local-layout-oracle-not-a-secret",
+        DATABASE_URL="sqlite:///:memory:",
+        VALKEY_URL="",
+        REDIS_URL="",
+        AWS_EC2_METADATA_DISABLED="true",
+        THEOREM_TEST_VALKEY_SERVER=str(valkey_executable),
+        THEOREM_LAYOUT_LOCAL_S3_ENDPOINT_URL=endpoint_url,
+        THEOREM_LAYOUT_LOCAL_S3_ACCESS_KEY_ID=access_key,
+        THEOREM_LAYOUT_LOCAL_S3_SECRET_ACCESS_KEY=secret_key,
+        THEOREM_LAYOUT_LOCAL_S3_REGION="us-east-1",
+        THEOREM_LAYOUT_LOCAL_S3_BUCKET_PREFIX="theorem-layout-oracle",
+    )
+    return environment
+
+
 def _download_and_verify(destination: Path) -> None:
     request = urllib.request.Request(
         MINIO_URL,
         headers={"User-Agent": "theorem-layout-local-oracle/1.0"},
     )
     digest = hashlib.sha256()
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     with (
-        urllib.request.urlopen(
+        opener.open(
             request,
             timeout=DOWNLOAD_TIMEOUT_SECONDS,
         ) as response,
@@ -71,13 +206,14 @@ def _download_and_verify(destination: Path) -> None:
         )
 
 
-def _verify_binary_identity(binary: Path) -> None:
+def _verify_binary_identity(binary: Path, environment: Mapping[str, str]) -> None:
     result = subprocess.run(
         [str(binary), "--version"],
         capture_output=True,
         text=True,
         timeout=VERSION_TIMEOUT_SECONDS,
         check=False,
+        env=environment,
     )
     expected = f"version {MINIO_RELEASE}"
     first_line = result.stdout.splitlines()[0] if result.stdout else ""
@@ -120,6 +256,7 @@ def _wait_for_minio(
     log_handle: TextIO,
     sensitive_values: tuple[str, ...],
 ) -> None:
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     deadline = time.monotonic() + READINESS_TIMEOUT_SECONDS
     while time.monotonic() < deadline:
         if process.poll() is not None:
@@ -129,7 +266,7 @@ def _wait_for_minio(
                 + _safe_log_excerpt(log_path, sensitive_values)
             )
         try:
-            with urllib.request.urlopen(health_url, timeout=1.0) as response:
+            with opener.open(health_url, timeout=1.0) as response:
                 if response.status == 200:
                     return
         except (TimeoutError, urllib.error.URLError):
@@ -158,6 +295,7 @@ def _s3_client(
             read_timeout=2,
             retries={"max_attempts": 1, "mode": "standard"},
             s3={"addressing_style": "path"},
+            proxies={},
         ),
     )
 
@@ -206,26 +344,118 @@ def _terminate_process_group(
         raise LocalOracleError(f"{label} survived SIGTERM and SIGKILL") from error
 
 
-def _run_pytest(environment: dict[str, str]) -> None:
+def _pytest_command(receipt_path: Path) -> list[str]:
+    return [
+        sys.executable,
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "-p",
+        "pytest_django.plugin",
+        "-o",
+        "addopts=",
+        f"--junitxml={receipt_path}",
+        "--",
+        *REQUIRED_TEST_NODE_IDS,
+    ]
+
+
+def _require_pytest_receipt(receipt_path: Path) -> str:
+    if not receipt_path.is_file():
+        raise LocalOracleError("local-oracle pytest receipt is missing")
+    try:
+        root = ET.parse(receipt_path).getroot()
+    except (ET.ParseError, OSError) as error:
+        raise LocalOracleError("local-oracle pytest receipt is malformed") from error
+
+    if root.tag == "testsuite":
+        suites = [root]
+    elif root.tag == "testsuites":
+        suites = list(root.findall("testsuite"))
+    else:
+        raise LocalOracleError("local-oracle pytest receipt has an invalid root")
+    if len(suites) != 1:
+        raise LocalOracleError(
+            "local-oracle pytest receipt must contain exactly one test suite"
+        )
+    suite = suites[0]
+    try:
+        tests = int(suite.attrib["tests"])
+        failures = int(suite.attrib["failures"])
+        errors = int(suite.attrib["errors"])
+        skipped = int(suite.attrib["skipped"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise LocalOracleError(
+            "local-oracle pytest receipt has invalid counters"
+        ) from error
+
+    if tests != len(REQUIRED_TEST_NODE_IDS):
+        raise LocalOracleError(
+            f"local-oracle pytest receipt must contain exactly 4 tests, got {tests}"
+        )
+    if skipped != 0:
+        raise LocalOracleError(
+            f"local-oracle pytest receipt must contain zero skipped tests, got {skipped}"
+        )
+    if failures != 0 or errors != 0:
+        raise LocalOracleError(
+            f"local-oracle pytest receipt contains failures={failures} errors={errors}"
+        )
+
+    cases = suite.findall("testcase")
+    identities = tuple(
+        (case.attrib.get("classname", ""), case.attrib.get("name", ""))
+        for case in cases
+    )
+    if len(cases) != len(REQUIRED_TEST_NODE_IDS) or set(identities) != set(
+        EXPECTED_TEST_IDENTITIES
+    ):
+        raise LocalOracleError(
+            "local-oracle pytest receipt does not identify the four required tests"
+        )
+    if len(set(identities)) != len(identities):
+        raise LocalOracleError("local-oracle pytest receipt contains duplicate tests")
+    for case in cases:
+        statuses = {
+            child.tag for child in case if child.tag in {"skipped", "failure", "error"}
+        }
+        if statuses:
+            raise LocalOracleError(
+                "local-oracle pytest receipt contains non-pass test status"
+            )
+    return "4 passed, 0 skipped"
+
+
+def _run_pytest(
+    environment: dict[str, str],
+    receipt_path: Path,
+    sensitive_values: tuple[str, ...],
+) -> str:
+    if receipt_path.exists():
+        raise LocalOracleError("local-oracle pytest receipt path already exists")
     process = subprocess.Popen(
-        [
-            sys.executable,
-            "-m",
-            "pytest",
-            "-q",
-            "tests/test_layout_local_oracles.py",
-        ],
+        _pytest_command(receipt_path),
         cwd=REPOSITORY_ROOT,
         env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
         start_new_session=True,
     )
     try:
-        return_code = process.wait(timeout=PYTEST_TIMEOUT_SECONDS)
+        output, _ = process.communicate(timeout=PYTEST_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired as error:
         _terminate_process_group(process, label="local-oracle pytest")
         raise LocalOracleError("local-oracle pytest exceeded 180 seconds") from error
+    safe_output = _redact(output, sensitive_values)
+    if safe_output:
+        print(safe_output, end="" if safe_output.endswith("\n") else "\n")
+    return_code = process.returncode
     if return_code != 0:
         raise LocalOracleError(f"local-oracle pytest failed with exit {return_code}")
+    return _require_pytest_receipt(receipt_path)
 
 
 def _require_closed_port(port: int) -> None:
@@ -246,17 +476,25 @@ def run_oracles() -> None:
     }:
         raise LocalOracleError("the pinned local MinIO oracle requires Darwin on ARM64")
 
+    inherited_environment = os.environ
+    valkey_executable, valkey_version = _resolve_valkey_executable(
+        inherited_environment
+    )
     temporary = tempfile.TemporaryDirectory(prefix="theorem-layout-minio-")
     root = Path(temporary.name)
     binary = root / f"minio.{MINIO_RELEASE}"
     data_dir = root / "data"
     config_dir = root / "config"
+    minio_tmp_dir = root / "minio-tmp"
+    pytest_tmp_dir = root / "pytest-tmp"
     log_path = root / "minio.log"
+    receipt_path = root / "pytest-receipt.xml"
     server_process: subprocess.Popen[str] | None = None
     log_handle: TextIO | None = None
     ports: tuple[int, int] = ()
     failure: BaseException | None = None
     cleanup_failures: list[str] = []
+    pytest_receipt: str | None = None
 
     access_key = f"theorem{secrets.token_hex(8)}"
     secret_key = secrets.token_urlsafe(32)
@@ -264,22 +502,24 @@ def run_oracles() -> None:
     try:
         _download_and_verify(binary)
         binary.chmod(0o700)
-        _verify_binary_identity(binary)
         data_dir.mkdir()
         config_dir.mkdir()
+        minio_tmp_dir.mkdir()
+        pytest_tmp_dir.mkdir()
+
+        server_environment = _build_minio_environment(
+            inherited_environment,
+            temporary_root=minio_tmp_dir,
+            access_key=access_key,
+            secret_key=secret_key,
+        )
+        _verify_binary_identity(binary, server_environment)
 
         reservations, ports = _reserve_loopback_ports()
         api_port, console_port = ports
         for reservation in reservations:
             reservation.close()
 
-        server_environment = os.environ.copy()
-        server_environment.update(
-            MINIO_ROOT_USER=access_key,
-            MINIO_ROOT_PASSWORD=secret_key,
-            MINIO_BROWSER="off",
-            MINIO_UPDATE="off",
-        )
         log_handle = log_path.open("w+", encoding="utf-8")
         server_process = subprocess.Popen(
             [
@@ -310,15 +550,19 @@ def run_oracles() -> None:
         )
         _prove_minio_identity_and_bucket(endpoint_url, access_key, secret_key)
 
-        test_environment = os.environ.copy()
-        test_environment.update(
-            THEOREM_LAYOUT_LOCAL_S3_ENDPOINT_URL=endpoint_url,
-            THEOREM_LAYOUT_LOCAL_S3_ACCESS_KEY_ID=access_key,
-            THEOREM_LAYOUT_LOCAL_S3_SECRET_ACCESS_KEY=secret_key,
-            THEOREM_LAYOUT_LOCAL_S3_REGION="us-east-1",
-            THEOREM_LAYOUT_LOCAL_S3_BUCKET_PREFIX="theorem-layout-oracle",
+        test_environment = _build_pytest_environment(
+            inherited_environment,
+            temporary_root=pytest_tmp_dir,
+            endpoint_url=endpoint_url,
+            access_key=access_key,
+            secret_key=secret_key,
+            valkey_executable=valkey_executable,
         )
-        _run_pytest(test_environment)
+        pytest_receipt = _run_pytest(
+            test_environment,
+            receipt_path,
+            sensitive_values,
+        )
     except BaseException as error:
         failure = error
     finally:
@@ -354,8 +598,12 @@ def run_oracles() -> None:
     if failure is not None:
         safe_failure = _redact(str(failure), sensitive_values)
         raise LocalOracleError(f"{type(failure).__name__}: {safe_failure}") from failure
+    if pytest_receipt != "4 passed, 0 skipped":
+        raise LocalOracleError("local-oracle pytest receipt was not verified")
     print(
-        f"verified: MinIO {MINIO_RELEASE} sha256={MINIO_SHA256}; "
+        f"verified: pytest receipt={pytest_receipt}; "
+        f"Valkey {valkey_version} executable={valkey_executable}; "
+        f"MinIO {MINIO_RELEASE} sha256={MINIO_SHA256}; "
         "exact board, real Valkey, and production artifact adapter passed; "
         "processes and temporary state removed"
     )
