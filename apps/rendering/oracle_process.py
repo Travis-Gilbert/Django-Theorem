@@ -228,17 +228,17 @@ def run_bounded_process(
 
     stdout = streams[process.stdout].decode("utf-8", errors="replace").strip()
     stderr = streams[process.stderr].decode("utf-8", errors="replace").strip()
+    if check and returncode != 0:
+        diagnostic = _captured_diagnostic(streams, sensitive_values)
+        raise ProcessExitedNonzero(
+            f"process failed ({returncode})\n"
+            f"command: {_command_context(command, sensitive_values)}\n"
+            f"diagnostic:\n{diagnostic}"
+        )
     output = _utf8_safe_tail(
         _redact(
             "\n".join(part for part in (stdout, stderr) if part), sensitive_values
         ),
         output_max_bytes,
     )
-    if check and returncode != 0:
-        diagnostic = _diagnostic_tail(output, sensitive_values)
-        raise ProcessExitedNonzero(
-            f"process failed ({returncode})\n"
-            f"command: {_command_context(command, sensitive_values)}\n"
-            f"diagnostic:\n{diagnostic}"
-        )
     return BoundedProcessResult(returncode=returncode, output=output)

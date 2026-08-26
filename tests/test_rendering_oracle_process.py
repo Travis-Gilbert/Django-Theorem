@@ -174,3 +174,32 @@ def test_oversize_sensitive_value_is_refused_before_process_start(tmp_path):
             cwd=tmp_path,
             sensitive_values=("s" * 4_097,),
         )
+
+
+@pytest.mark.parametrize("secret", ("redacted", "<redacted>"))
+def test_nonzero_diagnostic_redacts_marker_literal_exactly_once(tmp_path, secret):
+    with pytest.raises(ProcessExitedNonzero) as raised:
+        run_bounded_process(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import os,sys; "
+                    "sys.stderr.write(os.environ['ORACLE_MARKER_SECRET']); "
+                    "raise SystemExit(9)"
+                ),
+            ],
+            environment={
+                "PATH": "/usr/bin:/bin",
+                "ORACLE_MARKER_SECRET": secret,
+            },
+            timeout_seconds=10.0,
+            output_max_bytes=16_384,
+            cwd=tmp_path,
+            sensitive_values=(secret,),
+        )
+
+    diagnostic_tail = str(raised.value).partition("diagnostic:\n")[2]
+    assert diagnostic_tail == "<redacted>"
+    assert diagnostic_tail.count("<redacted>") == 1
+    assert len(diagnostic_tail.encode()) <= DIAGNOSTIC_TAIL_BYTES
