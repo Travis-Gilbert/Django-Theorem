@@ -42,6 +42,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "apps.layout.middleware.LayoutRequestBudgetMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -158,20 +159,14 @@ LAYOUT_MEMORY_CACHE_MAX_ENTRIES = env.int(
 LAYOUT_SUBPROCESS_TIMEOUT_SECONDS = env.float(
     "LAYOUT_SUBPROCESS_TIMEOUT_SECONDS", default=8.0
 )
-LAYOUT_MAX_OUTPUT_BYTES = env.int(
-    "LAYOUT_MAX_OUTPUT_BYTES", default=4 * 1024 * 1024
-)
+LAYOUT_MAX_OUTPUT_BYTES = env.int("LAYOUT_MAX_OUTPUT_BYTES", default=4 * 1024 * 1024)
 RENDER_SUBPROCESS_TIMEOUT_SECONDS = env.float(
     "RENDER_SUBPROCESS_TIMEOUT_SECONDS", default=12.0
 )
 RENDER_CPU_SECONDS = env.int("RENDER_CPU_SECONDS", default=10)
 RENDER_MEMORY_BYTES = env.int("RENDER_MEMORY_BYTES", default=1024 * 1024 * 1024)
-RENDER_MAX_SOURCE_BYTES = env.int(
-    "RENDER_MAX_SOURCE_BYTES", default=256 * 1024
-)
-RENDER_OUTPUT_MAX_BYTES = env.int(
-    "RENDER_OUTPUT_MAX_BYTES", default=16 * 1024 * 1024
-)
+RENDER_MAX_SOURCE_BYTES = env.int("RENDER_MAX_SOURCE_BYTES", default=256 * 1024)
+RENDER_OUTPUT_MAX_BYTES = env.int("RENDER_OUTPUT_MAX_BYTES", default=16 * 1024 * 1024)
 RENDER_GRAPHVIZ_BIN_DIR = env("RENDER_GRAPHVIZ_BIN_DIR", default="")
 PLANTUML_JAR_PATH = env("PLANTUML_JAR_PATH", default="/opt/plantuml/plantuml.jar")
 PLANTUML_VERSION = env("PLANTUML_VERSION", default="1.2026.6")

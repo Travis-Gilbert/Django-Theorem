@@ -189,6 +189,94 @@ def test_valkey_preflight_refuses_a_missing_executable(tmp_path):
         runner._resolve_valkey_executable({"PATH": str(tmp_path)})
 
 
+def test_valkey_version_probe_refuses_noisy_output_through_bounded_capture(
+    monkeypatch, tmp_path
+):
+    executable = tmp_path / "valkey-server"
+    executable.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys, time\n"
+        "sys.stdout.write('x' * 65536)\n"
+        "sys.stdout.flush()\n"
+        "time.sleep(5)\n",
+        encoding="utf-8",
+    )
+    executable.chmod(0o700)
+    monkeypatch.setattr(
+        runner.shutil, "which", lambda *_args, **_kwargs: str(executable)
+    )
+
+    started = time.monotonic()
+    with pytest.raises(runner.LocalOracleError, match="bounded version probe"):
+        runner._resolve_valkey_executable(
+            {"PATH": f"{tmp_path}{os.pathsep}{os.defpath}"}
+        )
+
+    assert runner.VERSION_OUTPUT_MAX_BYTES == 16 * 1024
+    assert time.monotonic() - started < 3.0
+
+
+def test_minio_version_probe_refuses_noisy_output_through_bounded_capture(
+    monkeypatch, tmp_path
+):
+    executable = tmp_path / "minio"
+    executable.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys, time\n"
+        "sys.stderr.write('x' * 65536)\n"
+        "sys.stderr.flush()\n"
+        "time.sleep(5)\n",
+        encoding="utf-8",
+    )
+    executable.chmod(0o700)
+
+    started = time.monotonic()
+    with pytest.raises(runner.LocalOracleError, match="bounded version probe"):
+        runner._verify_binary_identity(executable, {"PATH": os.defpath})
+
+    assert runner.VERSION_OUTPUT_MAX_BYTES == 16 * 1024
+    assert time.monotonic() - started < 3.0
+
+
+def test_noisy_minio_log_is_drained_to_bounded_tail_and_kills_process_group(tmp_path):
+    secret = "minio-log-secret"
+    process = runner.subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import os,sys,time; "
+                "secret=os.environ['ORACLE_SECRET'].encode(); "
+                "sys.stdout.buffer.write((b'x' * 65536) + secret); "
+                "sys.stdout.flush(); time.sleep(5)"
+            ),
+        ],
+        cwd=tmp_path,
+        env={"PATH": os.defpath, "ORACLE_SECRET": secret},
+        stdout=runner.subprocess.PIPE,
+        stderr=runner.subprocess.STDOUT,
+        start_new_session=True,
+    )
+    assert process.stdout is not None
+    log = runner._BoundedProcessLog(
+        process,
+        process.stdout,
+        max_bytes=1_024,
+        tail_bytes=128,
+    )
+    try:
+        process.wait(timeout=3.0)
+        log.close()
+    finally:
+        if process.poll() is None:
+            runner._terminate_process_group(process, label="noisy fake MinIO")
+
+    tail = log.tail((secret,))
+    assert log.output_limit_exceeded
+    assert len(tail.encode()) <= 128
+    assert secret not in tail
+
+
 def test_missing_valkey_fails_before_minio_download(monkeypatch, tmp_path):
     monkeypatch.setattr(runner.platform, "system", lambda: "Darwin")
     monkeypatch.setattr(runner.platform, "machine", lambda: "arm64")

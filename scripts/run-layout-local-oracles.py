@@ -14,13 +14,14 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from typing import BinaryIO
 from typing import Mapping
-from typing import TextIO
 from uuid import uuid4
 
 import boto3
@@ -45,7 +46,11 @@ MINIO_DOWNLOAD_MAX_BYTES = 256 * 1024 * 1024
 DOWNLOAD_READ_BYTES = 1024 * 1024
 DOWNLOAD_TIMEOUT_SECONDS = 30.0
 VERSION_TIMEOUT_SECONDS = 5.0
+VERSION_OUTPUT_MAX_BYTES = 16 * 1024
 READINESS_TIMEOUT_SECONDS = 15.0
+MINIO_LOG_MAX_BYTES = 1024 * 1024
+MINIO_LOG_TAIL_BYTES = 4_000
+MINIO_LOG_READ_BYTES = 64 * 1024
 PYTEST_TIMEOUT_SECONDS = 180.0
 PYTEST_OUTPUT_MAX_BYTES = 256 * 1024
 PYTEST_DIAGNOSTIC_MAX_BYTES = 8 * 1024
@@ -79,6 +84,68 @@ VALKEY_VERSION_PATTERN = re.compile(
 
 class LocalOracleError(RuntimeError):
     """A required real-process oracle or its cleanup failed."""
+
+
+class _BoundedProcessLog:
+    """Drain a long-running child while retaining only a bounded rolling tail."""
+
+    def __init__(
+        self,
+        process: subprocess.Popen[bytes],
+        stream: BinaryIO,
+        *,
+        max_bytes: int = MINIO_LOG_MAX_BYTES,
+        tail_bytes: int = MINIO_LOG_TAIL_BYTES,
+    ) -> None:
+        if max_bytes <= 0 or tail_bytes <= 0:
+            raise ValueError("process log limits must be positive")
+        self.process = process
+        self.stream = stream
+        self.max_bytes = max_bytes
+        self.tail_bytes = tail_bytes
+        self.total_bytes = 0
+        self.output_limit_exceeded = False
+        self.read_error: OSError | None = None
+        self._tail = bytearray()
+        self._thread = threading.Thread(
+            target=self._drain,
+            name="theorem-minio-log-drain",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def _drain(self) -> None:
+        try:
+            while chunk := os.read(self.stream.fileno(), MINIO_LOG_READ_BYTES):
+                self.total_bytes += len(chunk)
+                self._tail.extend(chunk)
+                retained_bytes = self.tail_bytes + 4_096
+                if len(self._tail) > retained_bytes:
+                    del self._tail[:-retained_bytes]
+                if self.total_bytes > self.max_bytes and not self.output_limit_exceeded:
+                    self.output_limit_exceeded = True
+                    try:
+                        os.killpg(self.process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+        except OSError as error:
+            self.read_error = error
+
+    def close(self) -> None:
+        self._thread.join(timeout=SHUTDOWN_TIMEOUT_SECONDS)
+        if self._thread.is_alive():
+            raise LocalOracleError("MinIO log drainer did not stop after process exit")
+        self.stream.close()
+        if self.read_error is not None:
+            raise LocalOracleError(f"MinIO log drain failed: {self.read_error}")
+
+    def tail(self, sensitive_values: tuple[str, ...]) -> str:
+        value = bytes(self._tail).decode("utf-8", errors="replace")
+        redacted = _redact(value, sensitive_values)
+        encoded = redacted.encode("utf-8")
+        if len(encoded) > self.tail_bytes:
+            redacted = encoded[-self.tail_bytes :].decode("utf-8", errors="ignore")
+        return redacted
 
 
 def _redact(value: str, sensitive_values: tuple[str, ...]) -> str:
@@ -126,15 +193,19 @@ def _resolve_valkey_executable(
     if not executable.is_file() or not os.access(executable, os.X_OK):
         raise LocalOracleError(f"Valkey executable is not executable: {executable}")
 
-    result = subprocess.run(
-        [str(executable), "--version"],
-        capture_output=True,
-        text=True,
-        timeout=VERSION_TIMEOUT_SECONDS,
-        check=False,
-        env=_minimal_system_environment(inherited),
-    )
-    first_line = (result.stdout or result.stderr).splitlines()
+    try:
+        result = run_bounded_process(
+            [str(executable), "--version"],
+            environment=_minimal_system_environment(inherited),
+            timeout_seconds=VERSION_TIMEOUT_SECONDS,
+            output_max_bytes=VERSION_OUTPUT_MAX_BYTES,
+            check=False,
+        )
+    except BoundedProcessError as error:
+        raise LocalOracleError(
+            f"Valkey bounded version probe failed: {error}"
+        ) from error
+    first_line = result.output.splitlines()
     identity = first_line[0] if first_line else ""
     match = VALKEY_VERSION_PATTERN.match(identity)
     if result.returncode != 0 or match is None:
@@ -282,16 +353,20 @@ def _download_and_verify(destination: Path) -> None:
 
 
 def _verify_binary_identity(binary: Path, environment: Mapping[str, str]) -> None:
-    result = subprocess.run(
-        [str(binary), "--version"],
-        capture_output=True,
-        text=True,
-        timeout=VERSION_TIMEOUT_SECONDS,
-        check=False,
-        env=environment,
-    )
+    try:
+        result = run_bounded_process(
+            [str(binary), "--version"],
+            environment=environment,
+            timeout_seconds=VERSION_TIMEOUT_SECONDS,
+            output_max_bytes=VERSION_OUTPUT_MAX_BYTES,
+            check=False,
+        )
+    except BoundedProcessError as error:
+        raise LocalOracleError(
+            f"MinIO bounded version probe failed: {error}"
+        ) from error
     expected = f"version {MINIO_RELEASE}"
-    first_line = result.stdout.splitlines()[0] if result.stdout else ""
+    first_line = result.output.splitlines()[0] if result.output else ""
     if result.returncode != 0 or expected not in first_line:
         raise LocalOracleError(
             f"pinned MinIO binary reported unexpected identity: {first_line!r}"
@@ -313,32 +388,24 @@ def _reserve_loopback_ports() -> tuple[list[socket.socket], tuple[int, int]]:
         raise
 
 
-def _safe_log_excerpt(
-    log_path: Path,
-    sensitive_values: tuple[str, ...],
-) -> str:
-    try:
-        excerpt = log_path.read_text(encoding="utf-8", errors="replace")[-4000:]
-    except OSError:
-        return "<MinIO log unavailable>"
-    return _redact(excerpt, sensitive_values)
-
-
 def _wait_for_minio(
-    process: subprocess.Popen[str],
+    process: subprocess.Popen[bytes],
     health_url: str,
-    log_path: Path,
-    log_handle: TextIO,
+    process_log: _BoundedProcessLog,
     sensitive_values: tuple[str, ...],
 ) -> None:
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     deadline = time.monotonic() + READINESS_TIMEOUT_SECONDS
     while time.monotonic() < deadline:
+        if process_log.output_limit_exceeded:
+            raise LocalOracleError(
+                "pinned MinIO exceeded its startup output cap:\n"
+                + process_log.tail(sensitive_values)
+            )
         if process.poll() is not None:
-            log_handle.flush()
             raise LocalOracleError(
                 "pinned MinIO exited before readiness:\n"
-                + _safe_log_excerpt(log_path, sensitive_values)
+                + process_log.tail(sensitive_values)
             )
         try:
             with opener.open(health_url, timeout=1.0) as response:
@@ -346,10 +413,9 @@ def _wait_for_minio(
                     return
         except (TimeoutError, urllib.error.URLError):
             time.sleep(0.05)
-    log_handle.flush()
     raise LocalOracleError(
         "pinned MinIO did not become ready before its deadline:\n"
-        + _safe_log_excerpt(log_path, sensitive_values)
+        + process_log.tail(sensitive_values)
     )
 
 
@@ -572,10 +638,9 @@ def run_oracles() -> None:
     config_dir = root / "config"
     minio_tmp_dir = root / "minio-tmp"
     pytest_tmp_dir = root / "pytest-tmp"
-    log_path = root / "minio.log"
     receipt_path = root / "pytest-receipt.xml"
-    server_process: subprocess.Popen[str] | None = None
-    log_handle: TextIO | None = None
+    server_process: subprocess.Popen[bytes] | None = None
+    process_log: _BoundedProcessLog | None = None
     ports: tuple[int, int] = ()
     failure: BaseException | None = None
     cleanup_failures: list[str] = []
@@ -605,7 +670,6 @@ def run_oracles() -> None:
         for reservation in reservations:
             reservation.close()
 
-        log_handle = log_path.open("w+", encoding="utf-8")
         server_process = subprocess.Popen(
             [
                 str(binary),
@@ -620,17 +684,17 @@ def run_oracles() -> None:
             ],
             cwd=root,
             env=server_environment,
-            stdout=log_handle,
+            stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            text=True,
             start_new_session=True,
         )
+        assert server_process.stdout is not None
+        process_log = _BoundedProcessLog(server_process, server_process.stdout)
         endpoint_url = f"http://127.0.0.1:{api_port}"
         _wait_for_minio(
             server_process,
             f"{endpoint_url}/minio/health/ready",
-            log_path,
-            log_handle,
+            process_log,
             sensitive_values,
         )
         _prove_minio_identity_and_bucket(endpoint_url, access_key, secret_key)
@@ -656,11 +720,16 @@ def run_oracles() -> None:
                 _terminate_process_group(server_process, label="pinned MinIO")
             except Exception as error:  # noqa: BLE001 - cleanup must be reported
                 cleanup_failures.append(str(error))
-        if log_handle is not None:
+        if process_log is not None:
             try:
-                log_handle.close()
-            except OSError as error:
-                cleanup_failures.append(f"cannot close MinIO log: {error}")
+                process_log.close()
+            except Exception as error:  # noqa: BLE001 - cleanup must be reported
+                cleanup_failures.append(str(error))
+            if process_log.output_limit_exceeded and failure is None:
+                failure = LocalOracleError(
+                    "pinned MinIO exceeded its output cap:\n"
+                    + process_log.tail(sensitive_values)
+                )
         for port in ports:
             try:
                 _require_closed_port(port)

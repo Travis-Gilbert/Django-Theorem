@@ -12,11 +12,17 @@ import sys
 import tempfile
 from functools import lru_cache
 from pathlib import Path
+from time import monotonic
 
 from django.conf import settings
 import pygraphviz
 
 from apps.layout.cache import get_cached_response, set_cached_response
+from apps.layout.budget import (
+    LAYOUT_GRAPHVIZ_MAX_SECONDS,
+    LAYOUT_REQUEST_TIMEOUT_SECONDS,
+    MAX_LAYOUT_RESPONSE_BYTES,
+)
 from apps.layout.canonical import canonical_dot, validate_graph
 from apps.layout.contracts import LayoutPosition, LayoutRequest, LayoutResponse
 from apps.layout.policy import resolve_policy
@@ -32,6 +38,10 @@ class LayoutExecutionTimeout(LayoutExecutionError):
     pass
 
 
+class LayoutResponseTooLarge(LayoutExecutionError):
+    pass
+
+
 @lru_cache(maxsize=1)
 def graphviz_version() -> str:
     # This is the runtime linked into pygraphviz, which is more authoritative
@@ -40,22 +50,27 @@ def graphviz_version() -> str:
 
 
 def _limit_worker_output() -> None:
-    output_bytes = int(
-        getattr(settings, "LAYOUT_MAX_OUTPUT_BYTES", 4 * 1024 * 1024)
-    )
+    output_bytes = int(getattr(settings, "LAYOUT_MAX_OUTPUT_BYTES", 4 * 1024 * 1024))
     resource.setrlimit(resource.RLIMIT_FSIZE, (output_bytes, output_bytes))
 
 
-def _execute_worker(dot: str, engine: str, node_ids: list[str]) -> dict[str, dict[str, float]]:
+def _execute_worker(
+    dot: str,
+    engine: str,
+    node_ids: list[str],
+    *,
+    timeout_seconds: float | None = None,
+) -> dict[str, dict[str, float]]:
     payload = json.dumps(
         {"dot": dot, "engine": engine, "node_ids": node_ids},
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
-    output_limit = int(
-        getattr(settings, "LAYOUT_MAX_OUTPUT_BYTES", 4 * 1024 * 1024)
-    )
-    with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
+    output_limit = int(getattr(settings, "LAYOUT_MAX_OUTPUT_BYTES", 4 * 1024 * 1024))
+    with (
+        tempfile.TemporaryFile() as stdout_file,
+        tempfile.TemporaryFile() as stderr_file,
+    ):
         process = subprocess.Popen(
             [sys.executable, "-I", str(WORKER_PATH)],
             env={
@@ -70,17 +85,30 @@ def _execute_worker(dot: str, engine: str, node_ids: list[str]) -> dict[str, dic
             start_new_session=True,
             preexec_fn=_limit_worker_output,
         )
+        configured_timeout = min(
+            float(getattr(settings, "LAYOUT_SUBPROCESS_TIMEOUT_SECONDS", 8.0)),
+            LAYOUT_GRAPHVIZ_MAX_SECONDS,
+        )
+        worker_timeout = configured_timeout
+        if timeout_seconds is not None:
+            worker_timeout = min(worker_timeout, timeout_seconds)
+        if worker_timeout <= 0:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.communicate()
+            raise LayoutExecutionTimeout(
+                "layout request exceeded its whole-request deadline"
+            )
         try:
             process.communicate(
                 payload,
-                timeout=float(
-                    getattr(settings, "LAYOUT_SUBPROCESS_TIMEOUT_SECONDS", 8.0)
-                ),
+                timeout=worker_timeout,
             )
         except subprocess.TimeoutExpired as exc:
             os.killpg(process.pid, signal.SIGKILL)
             process.communicate()
-            raise LayoutExecutionTimeout("Graphviz layout exceeded its deadline") from exc
+            raise LayoutExecutionTimeout(
+                "Graphviz layout exceeded its deadline"
+            ) from exc
 
         stdout_size = os.fstat(stdout_file.fileno()).st_size
         stderr_size = os.fstat(stderr_file.fileno()).st_size
@@ -107,11 +135,15 @@ def _execute_worker(dot: str, engine: str, node_ids: list[str]) -> dict[str, dic
     except json.JSONDecodeError as exc:
         raise LayoutExecutionError("Graphviz worker returned invalid JSON") from exc
     if sorted(result) != sorted(node_ids):
-        raise LayoutExecutionError("Graphviz worker returned an incomplete position set")
+        raise LayoutExecutionError(
+            "Graphviz worker returned an incomplete position set"
+        )
     return result
 
 
-def _digest_input(dot: str, engine: str, policy_params: dict[str, object], version: str) -> str:
+def _digest_input(
+    dot: str, engine: str, policy_params: dict[str, object], version: str
+) -> str:
     canonical_params = json.dumps(
         policy_params, sort_keys=True, separators=(",", ":"), ensure_ascii=False
     )
@@ -119,7 +151,32 @@ def _digest_input(dot: str, engine: str, policy_params: dict[str, object], versi
     return hashlib.sha256(payload).hexdigest()
 
 
-def compute_layout(body: LayoutRequest, *, tenant_slug: str) -> bytes:
+def _remaining_budget(deadline: float) -> float:
+    remaining = deadline - monotonic()
+    if remaining <= 0:
+        raise LayoutExecutionTimeout(
+            "layout request exceeded its whole-request deadline"
+        )
+    return remaining
+
+
+def _enforce_response_budget(encoded: bytes) -> bytes:
+    if len(encoded) > MAX_LAYOUT_RESPONSE_BYTES:
+        raise LayoutResponseTooLarge(
+            f"layout response exceeds {MAX_LAYOUT_RESPONSE_BYTES} bytes"
+        )
+    return encoded
+
+
+def compute_layout(
+    body: LayoutRequest,
+    *,
+    tenant_slug: str,
+    deadline: float | None = None,
+) -> bytes:
+    if deadline is None:
+        deadline = monotonic() + LAYOUT_REQUEST_TIMEOUT_SECONDS
+    _remaining_budget(deadline)
     validate_graph(body.nodes, body.edges)
     graph_class, policy, focus_id = resolve_policy(
         body.graph_class, body.nodes, body.edges, body.params
@@ -131,16 +188,29 @@ def compute_layout(body: LayoutRequest, *, tenant_slug: str) -> bytes:
     digest_hex = _digest_input(
         dot,
         engine,
-        {"graph_class": graph_class, "graph_attrs": effective_attrs, "focus_id": focus_id},
+        {
+            "graph_class": graph_class,
+            "graph_attrs": effective_attrs,
+            "focus_id": focus_id,
+        },
         version,
     )
-    cached = get_cached_response(tenant_slug, digest_hex)
+    _remaining_budget(deadline)
+    cached = get_cached_response(tenant_slug, digest_hex, deadline=deadline)
+    _remaining_budget(deadline)
     if cached is not None:
-        return cached
+        return _enforce_response_budget(cached)
 
     raw_positions = _execute_worker(
-        dot, engine, sorted(node.id for node in body.nodes)
+        dot,
+        engine,
+        sorted(node.id for node in body.nodes),
+        timeout_seconds=min(
+            LAYOUT_GRAPHVIZ_MAX_SECONDS,
+            _remaining_budget(deadline),
+        ),
     )
+    _remaining_budget(deadline)
     response = LayoutResponse(
         positions=[
             LayoutPosition(
@@ -161,5 +231,8 @@ def compute_layout(body: LayoutRequest, *, tenant_slug: str) -> bytes:
         separators=(",", ":"),
         ensure_ascii=False,
     ).encode("utf-8")
-    set_cached_response(tenant_slug, digest_hex, encoded)
+    encoded = _enforce_response_budget(encoded)
+    _remaining_budget(deadline)
+    set_cached_response(tenant_slug, digest_hex, encoded, deadline=deadline)
+    _remaining_budget(deadline)
     return encoded

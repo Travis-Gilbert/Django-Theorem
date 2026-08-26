@@ -88,7 +88,8 @@ def test_compute_is_authenticated_cached_and_byte_deterministic(
 ):
     calls = []
 
-    def deterministic_positions(_dot, engine, node_ids):
+    def deterministic_positions(_dot, engine, node_ids, *, timeout_seconds):
+        assert 0 < timeout_seconds <= 8.0
         calls.append((engine, node_ids))
         return {
             "V01": {"x": 216.0, "y": 24.0},
@@ -122,7 +123,7 @@ def test_cache_is_tenant_scoped(admitted_client, monkeypatch):
     monkeypatch.setattr("apps.layout.service.graphviz_version", lambda: "2.42.2")
     monkeypatch.setattr(
         "apps.layout.service._execute_worker",
-        lambda _dot, _engine, node_ids: (
+        lambda _dot, _engine, node_ids, *, timeout_seconds: (
             calls.append(node_ids)
             or {node_id: {"x": 1.0, "y": 2.0} for node_id in node_ids}
         ),
@@ -145,7 +146,9 @@ def test_cache_degrades_to_bounded_process_memory_when_valkey_fails(monkeypatch)
             assert ex > 0
             raise OSError("Valkey write unavailable")
 
-    monkeypatch.setattr("apps.layout.cache._redis_client", lambda: FailingClient())
+    monkeypatch.setattr(
+        "apps.layout.cache._redis_client", lambda _deadline=None: FailingClient()
+    )
     monkeypatch.setattr("apps.layout.cache.settings.LAYOUT_MEMORY_CACHE_MAX_ENTRIES", 2)
 
     set_cached_response("tenant", "one", b"one")
