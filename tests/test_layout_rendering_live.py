@@ -19,6 +19,7 @@ from django.test import override_settings
 from apps.layout.cache import cache_key
 from apps.layout.contracts import LayoutRequest
 from apps.layout.service import compute_layout
+from tests.layout_oracles import assert_plan_dependency_flow
 
 LIVE_BASE_URL = os.environ.get("THEOREM_LAYOUT_RENDERING_LIVE_BASE_URL", "").rstrip("/")
 LIVE_MACHINE_KEY = os.environ.get("THEOREM_LAYOUT_RENDERING_LIVE_MACHINE_KEY", "")
@@ -135,13 +136,7 @@ def test_real_chat_plan_board_reads_left_to_right_with_verify_siblings():
     positions = {
         position["id"]: position for position in first.json()["positions"]
     }
-    for edge in payload["edges"]:
-        source_x = positions[edge["from"]]["x_px"]
-        target_x = positions[edge["to"]]["x_px"]
-        if edge["kind"] == "verifies":
-            assert abs(source_x - target_x) <= 1.0
-        else:
-            assert target_x >= source_x
+    assert_plan_dependency_flow(payload, positions)
 
 
 @pytest.mark.live

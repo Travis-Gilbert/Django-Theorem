@@ -244,18 +244,51 @@ for an explicitly versioned successor. Set `THEOREM_LAYOUT_LIVE_VALKEY_URL` to
 run the separate deployed Valkey cache oracle. Neither gate accepts the
 two-node wire fixture as a substitute.
 
-Run the bounded local oracles with:
+Run the complete bounded local replay with:
+
+```bash
+.venv/bin/python scripts/run-layout-local-oracles.py
+```
+
+The replay starts the installed `valkey-server` on a dynamically selected
+loopback port with a temporary data directory. It downloads the immutable
+official Darwin/ARM64 MinIO archive
+`minio.RELEASE.2025-09-07T16-13-09Z` into a separate temporary directory and
+checks the reviewed SHA-256 before making it executable. MinIO receives fresh
+credentials, data, config, API port, and console port for that invocation. The
+helper proves the binary and S3 server identity, runs the exact board, real
+Valkey, and production `ArtifactStore.from_settings()` tests, then requires the
+processes, ports, and temporary state to be gone. It accepts no endpoint
+argument, so moto or an operator-selected loopback service cannot receive
+real-process credit.
+
+The direct pytest module remains useful when an operator already owns a local
+S3-compatible process:
 
 ```bash
 .venv/bin/pytest -q tests/test_layout_local_oracles.py
 ```
 
-That focused module starts the installed `valkey-server` on a dynamically
-selected loopback port with a temporary data directory and always terminates
-it. The artifact-store case is skipped unless all
-`THEOREM_LAYOUT_LOCAL_S3_*` variables point to an actual loopback
-S3-compatible process; it uses `ArtifactStore.from_settings()` and refuses a
-non-loopback endpoint rather than falling back to a mock or hosted service.
+Its artifact-store case requires all `THEOREM_LAYOUT_LOCAL_S3_*` variables and
+refuses non-loopback endpoints. That operator-hosted path is separate from the
+pinned disposable-MinIO replay above.
+
+Reproduce the Agent Chat fixture from the immutable Theorem Plan object with:
+
+```bash
+.venv/bin/python scripts/check-agent-chat-layout-fixture.py \
+  --theorem-repo '/path/to/Theorem'
+```
+
+The checker reads generation 15 with `git show` at commit
+`f125a04118fce2e7a971b89d663d24a4cf2caa43`, assigns edge IDs in source
+task/dependency order, classifies an edge as `verifies` only when the source
+names the target as its verification sibling, applies the documented W/V/plan
+node sizes, and then sorts nodes and edges for the wire fixture. The
+source-topology receipt is SHA-256 over UTF-8 JSON containing sorted node IDs
+and sorted `{from,to}` pairs, encoded with sorted object keys and separators
+`,` and `:`. The request receipt uses the same canonical JSON encoding over the
+complete generated `layout_request`.
 
 ## RunPod and R execution contract
 

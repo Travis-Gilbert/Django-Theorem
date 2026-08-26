@@ -3,8 +3,9 @@
     "evidence_class": "exact_local_plan_projection_fixture",
     "native_layout_oracle": true,
     "source_plan": "THEOREMWEB-AGENT-CHAT-1.0",
+    "source_generation": 15,
     "source_commit": "f125a04118fce2e7a971b89d663d24a4cf2caa43",
-    "source_plan_projection_digest": "sha256:7cbcaa599ee6ca04dbbd0a4756a8202b5ef8e8379c6e8e385ade1c32b4f1b3d0",
+    "source_topology_digest": "sha256:f1835b7fec12725c786d106101219c840fa11505c70c4cab032bbc77c9941ca7",
     "layout_request_digest": "sha256:14ffacc106a641a9fe3559e3df1d12b036a4a5cbc059d7dcafae820c46f2b5c8",
     "note": "Exact 31-node/44-edge topology from the governing Agent Chat portable plan generation 15; runtime coordinates remain Graphviz-version-specific."
   },

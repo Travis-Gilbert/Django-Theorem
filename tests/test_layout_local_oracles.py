@@ -33,6 +33,7 @@ from apps.orchestration.artifacts import (
     ArtifactValidationError,
     sha256_digest,
 )
+from tests.layout_oracles import assert_plan_dependency_flow
 
 SPEC_FIXTURE_PATH = (
     Path(__file__).resolve().parents[1]
@@ -51,6 +52,23 @@ LOCAL_S3_ENV = (
 def _agent_chat_request() -> tuple[dict, LayoutRequest]:
     fixture = json.loads(SPEC_FIXTURE_PATH.read_text(encoding="utf-8"))
     return fixture, LayoutRequest.model_validate(fixture["layout_request"])
+
+
+def test_plan_flow_oracle_rejects_a_collapsed_dependency_rank():
+    payload = {
+        "edges": [
+            {"from": "W01", "to": "V01", "kind": "verifies"},
+            {"from": "V01", "to": "W02", "kind": "dependency"},
+        ]
+    }
+    positions = {
+        "W01": {"x_px": 100.0},
+        "V01": {"x_px": 100.0},
+        "W02": {"x_px": 100.0},
+    }
+
+    with pytest.raises(AssertionError):
+        assert_plan_dependency_flow(payload, positions)
 
 
 def _unused_loopback_port() -> int:
@@ -122,24 +140,13 @@ def _isolated_valkey():
 
 def test_exact_agent_chat_board_uses_plan_dag_native_layout():
     fixture, request = _agent_chat_request()
+    evidence = fixture["fixture_evidence"]
 
-    assert fixture["fixture_evidence"] == {
-        "evidence_class": "exact_local_plan_projection_fixture",
-        "native_layout_oracle": True,
-        "source_plan": "THEOREMWEB-AGENT-CHAT-1.0",
-        "source_commit": SPEC_SOURCE_COMMIT,
-        "source_plan_projection_digest": (
-            "sha256:7cbcaa599ee6ca04dbbd0a4756a8202b5ef8e8379c6e8e385ade1c32b4f1b3d0"
-        ),
-        "layout_request_digest": (
-            "sha256:14ffacc106a641a9fe3559e3df1d12b036a4a5cbc059d7dcafae820c46f2b5c8"
-        ),
-        "note": (
-            "Exact 31-node/44-edge topology from the governing Agent Chat "
-            "portable plan generation 15; runtime coordinates remain "
-            "Graphviz-version-specific."
-        ),
-    }
+    assert evidence["evidence_class"] == "exact_local_plan_projection_fixture"
+    assert evidence["native_layout_oracle"] is True
+    assert evidence["source_plan"] == "THEOREMWEB-AGENT-CHAT-1.0"
+    assert evidence["source_generation"] == 15
+    assert evidence["source_commit"] == SPEC_SOURCE_COMMIT
     assert len(request.nodes) == 31
     assert len(request.edges) == 44
     assert request.graph_class == "plan_dag"
@@ -149,7 +156,7 @@ def test_exact_agent_chat_board_uses_plan_dag_native_layout():
         separators=(",", ":"),
         ensure_ascii=False,
     ).encode("utf-8")
-    assert fixture["fixture_evidence"]["layout_request_digest"] == (
+    assert evidence["layout_request_digest"] == (
         f"sha256:{hashlib.sha256(canonical_request).hexdigest()}"
     )
     assert (
@@ -170,13 +177,7 @@ def test_exact_agent_chat_board_uses_plan_dag_native_layout():
     assert set(positions) == {node.id for node in request.nodes}
     verify_edges = [edge for edge in request.edges if edge.kind == "verifies"]
     assert len(verify_edges) == 12
-    for edge in request.edges:
-        source_x = positions[edge.from_]["x_px"]
-        target_x = positions[edge.to]["x_px"]
-        if edge.kind == "verifies":
-            assert target_x == pytest.approx(source_x, abs=1.0)
-        else:
-            assert target_x > source_x
+    assert_plan_dependency_flow(fixture["layout_request"], positions)
 
 
 def test_real_local_valkey_cold_warm_and_version_sensitive_keys(monkeypatch):
