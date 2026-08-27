@@ -291,6 +291,12 @@ THEOREM_LAYOUT_RENDERING_LIVE_MACHINE_KEY=thk_... \
 .venv/bin/pytest -q -m live tests/test_layout_rendering_live.py
 ```
 
+`fly.layout-test.toml` is the production-isolated hosted layout oracle used by
+TheoremWeb staging. It deploys the same image with one web process, a dedicated
+SQLite volume, and no production Postgres, Valkey, RunPod, or object-storage
+credentials. Machine keys are minted inside that app for the staging tenant and
+are stored only in the consuming Fly app's secrets.
+
 The exact 31-node/44-edge Agent Chat board is committed as
 `contracts/theorem.layout.v1.agent-chat-plan.fixture.json` and is the default
 deployed board input. `THEOREM_CHAT_PLAN_LAYOUT_FIXTURE` may override that path
