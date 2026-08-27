@@ -31,7 +31,7 @@ content-addressed prior/model artifacts, and exposes inspectable recovery state.
 - psycopg (Postgres via PgBouncer)
 - RunPod Serverless v2 lifecycle client for GPU/Python workloads
 - Separate Fly app and Celery queue `offload.r` for R workloads (agent name `"R"`)
-- Graphviz 2.42.2/PyGraphviz positions plus bounded PlantUML and Diagrams rendering
+- Debian Graphviz 2.42.2-7+deb12u1 (linked runtime 2.43.0)/PyGraphviz positions plus bounded PlantUML and Diagrams rendering
 
 ## Quick start
 
@@ -104,7 +104,7 @@ preflight as the Fly R worker before starting Celery.
 | `LAYOUT_SUBPROCESS_TIMEOUT_SECONDS` | Hard Graphviz worker deadline (default 8 seconds) |
 | `LAYOUT_MAX_OUTPUT_BYTES` | Maximum isolated Graphviz response bytes (default 4 MiB) |
 | `RENDER_SUBPROCESS_TIMEOUT_SECONDS` | PlantUML/Diagrams worker deadline (default 12 seconds) |
-| `RENDER_CPU_SECONDS` / `RENDER_MEMORY_BYTES` | Linux renderer CPU/address-space limits |
+| `RENDER_CPU_SECONDS` / `RENDER_MEMORY_BYTES` | Linux renderer CPU/address-space limits (defaults: 10 seconds / 2 GiB) |
 | `RENDER_MAX_SOURCE_BYTES` / `RENDER_OUTPUT_MAX_BYTES` | Renderer input/output bounds |
 | `PLANTUML_JAR_PATH` / `PLANTUML_VERSION` / `PLANTUML_SECURITY_PROFILE` | Checksum-pinned PlantUML runtime identity and mandatory `SANDBOX` profile |
 
@@ -225,11 +225,13 @@ source must move that worker to a credential-free sandbox or sidecar.
 
 Rendered bytes are read back after upload and published as
 `tenants/<tenant-id>/renders/<sha256>.<ext>` with a short-lived presigned GET.
-The Docker image pins Debian Graphviz 2.42.2, compiles PyGraphviz 2.0.1 against
-that library, installs Diagrams 0.25.1 and OpenJDK 17, and checksum-verifies the
-PlantUML 1.2026.6 jar. `contracts/theorem.layout.v1.fixture.json` is a strict
-wire fixture; its named coordinates are not a substitute for the native
-container or hosted/authenticated oracles.
+The Docker image binds APT to snapshot `20260801T000000Z`, pins Debian Graphviz
+2.42.2-7+deb12u1 (which reports linked runtime 2.43.0), compiles PyGraphviz 2.0.1
+against that library, installs Diagrams 0.25.1 and OpenJDK 17, and
+checksum-verifies the PlantUML 1.2026.6 jar.
+`contracts/theorem.layout.v1.fixture.json` is a strict wire fixture; its named
+coordinates are not a substitute for the native container or
+hosted/authenticated oracles.
 
 Evidence is intentionally split by boundary:
 
@@ -238,8 +240,8 @@ Evidence is intentionally split by boundary:
 | Fixture and source projection | Exact `theorem.layout.v1` fixture plus reproducible generation-15 31-node/44-edge topology | No Graphviz execution |
 | Local process | Native Graphviz 14.1.5 exact-board layout and real Valkey cold/warm/version-key replay | No declared-image or hosted cache proof |
 | Production adapter, local endpoint | `ArtifactStore.from_settings()` through checksum-bound disposable MinIO, signed readback/expiry, and cross-tenant refusal | No hosted object-storage proof |
-| Native renderer | Checksum/version-bound PlantUML 1.2026.6 and Diagrams 0.25.1 through native Graphviz 14.1.5 | No declared-image Graphviz 2.42.2 proof |
-| Declared image | Gate implemented; last preflight exited `2` because no supported local Docker client/engine was available and the volume was below the 20 GiB floor | Not passed |
+| Native renderer | Checksum/version-bound PlantUML 1.2026.6 and Diagrams 0.25.1 through native Graphviz 14.1.5 | No declared-image Debian Graphviz 2.42.2-7+deb12u1 / linked runtime 2.43.0 proof |
+| Declared image | Fly image `graph-layout-v03-20260827-r3` at digest `sha256:f103d8c52ddfb7ab11a8432f533eb5fc3031f128c04b58d266cf5f5379a8b47d`; exact checked-in probe on auto-removed Machine `28654915a91208` | Passed: pinned identities, real renderer smokes, Django checks, and no-skip cold fixture; not hosted/authenticated product proof |
 | Hosted/authenticated | Env-gated tests committed | Not run without deployment URLs, credentials, hosted Valkey, and hosted object storage |
 
 Replay the native rendering boundary without installing host packages:
@@ -259,7 +261,7 @@ and isolated Diagrams functions. It requires real SVG and PNG bytes,
 digest-derived tenant render keys, SANDBOX local-include refusal, a refusal that
 names a forbidden Diagrams import, and complete temporary-state cleanup. This
 is native renderer evidence only: Graphviz 14.1.5 does not substitute for the
-declared image's Graphviz 2.42.2 pin.
+declared image's Debian Graphviz 2.42.2-7+deb12u1 package and linked runtime 2.43.0.
 
 Run the declared-image preflight and gate with:
 

@@ -19,6 +19,7 @@ from apps.keys.mint import mint_api_key
 from apps.orchestration.artifacts import ArtifactNotFoundError, sha256_digest
 from apps.rendering.validation import DiagramSourceError, validate_diagrams_source
 from apps.rendering.service import (
+    PLANTUML_JAVA_RUNTIME_FLAGS,
     RenderExecutionError,
     RenderExecutionTimeout,
     _run,
@@ -234,9 +235,7 @@ def test_renderer_subprocess_environment_admits_only_an_absolute_graphviz_bin(
             _subprocess_environment()
 
 
-def test_plantuml_command_forces_sandbox_and_server_owned_svg(
-    tmp_path, monkeypatch
-):
+def test_plantuml_command_forces_sandbox_and_server_owned_svg(tmp_path, monkeypatch):
     jar_path = tmp_path / "plantuml.jar"
     jar_path.write_bytes(b"fixture")
     jar_digest = sha256(b"fixture").hexdigest()
@@ -260,8 +259,11 @@ def test_plantuml_command_forces_sandbox_and_server_owned_svg(
         )
 
     assert calls[0][0][-1] == "-version"
+    assert all(flag in calls[0][0] for flag in PLANTUML_JAVA_RUNTIME_FLAGS)
     command, stdin, cwd = calls[1]
+    assert all(flag in command for flag in PLANTUML_JAVA_RUNTIME_FLAGS)
     assert "-DPLANTUML_SECURITY_PROFILE=SANDBOX" in command
+    assert command.index("-DPLANTUML_SECURITY_PROFILE=SANDBOX") < command.index("-jar")
     assert command[-2:] == ["-tsvg", "-pipe"]
     assert stdin.startswith(b"@startuml")
     assert cwd is None
@@ -359,7 +361,7 @@ def test_plantuml_accepts_diagnostic_phrases_in_valid_diagram_text(
         PLANTUML_SECURITY_PROFILE="SANDBOX",
     ):
         payload, media_type, version = render_plantuml(
-            f"@startuml\nrectangle \"{ordinary_text}\"\n@enduml"
+            f'@startuml\nrectangle "{ordinary_text}"\n@enduml'
         )
 
     assert payload == valid_svg
@@ -375,9 +377,7 @@ def test_plantuml_renders_stores_and_presigns(rendering_client, monkeypatch):
         "apps.rendering.api.render_plantuml",
         lambda _source: (svg, "image/svg+xml", "1.2026.6"),
     )
-    monkeypatch.setattr(
-        "apps.rendering.api.ArtifactStore.from_settings", lambda: store
-    )
+    monkeypatch.setattr("apps.rendering.api.ArtifactStore.from_settings", lambda: store)
 
     response = post_json(
         rendering_client,
@@ -402,18 +402,14 @@ def test_plantuml_renders_stores_and_presigns(rendering_client, monkeypatch):
 
 
 @pytest.mark.django_db
-def test_diagrams_renders_png_through_same_artifact_lane(
-    rendering_client, monkeypatch
-):
+def test_diagrams_renders_png_through_same_artifact_lane(rendering_client, monkeypatch):
     store = RecordingArtifactStore()
     png = b"\x89PNG\r\n\x1a\nfixture"
     monkeypatch.setattr(
         "apps.rendering.api.render_diagrams",
         lambda _source, _format: (png, "image/png", "0.25.1"),
     )
-    monkeypatch.setattr(
-        "apps.rendering.api.ArtifactStore.from_settings", lambda: store
-    )
+    monkeypatch.setattr("apps.rendering.api.ArtifactStore.from_settings", lambda: store)
 
     response = post_json(
         rendering_client,
@@ -453,9 +449,7 @@ def test_descriptor_refresh_revalidates_tenant_bytes_and_returns_a_fresh_url(
         payload=payload,
         extension=extension,
     )
-    monkeypatch.setattr(
-        "apps.rendering.api.ArtifactStore.from_settings", lambda: store
-    )
+    monkeypatch.setattr("apps.rendering.api.ArtifactStore.from_settings", lambda: store)
     request = {
         "contract": "theorem.rendering.v1",
         "renderer": renderer,
@@ -479,7 +473,9 @@ def test_descriptor_refresh_revalidates_tenant_bytes_and_returns_a_fresh_url(
     assert first_body["artifact"]["payload_digest"] == store.payload_digest
     assert first_body["artifact"]["content_type"] == content_type
     assert first_body["artifact"]["byte_length"] == len(payload)
-    assert first_body["artifact"]["expires_at_ms"] > int(timezone.now().timestamp() * 1000)
+    assert first_body["artifact"]["expires_at_ms"] > int(
+        timezone.now().timestamp() * 1000
+    )
     assert first_body["artifact"]["download_url"].endswith("signature=1")
     assert second_body["artifact"]["download_url"].endswith("signature=2")
     assert store.reads == [
@@ -510,9 +506,7 @@ def test_descriptor_refresh_fails_closed_for_untrusted_metadata(
         payload=payload,
         extension="svg",
     )
-    monkeypatch.setattr(
-        "apps.rendering.api.ArtifactStore.from_settings", lambda: store
-    )
+    monkeypatch.setattr("apps.rendering.api.ArtifactStore.from_settings", lambda: store)
     request = {
         "contract": "theorem.rendering.v1",
         "renderer": "plantuml",
@@ -523,9 +517,7 @@ def test_descriptor_refresh_fails_closed_for_untrusted_metadata(
     }
     request.update(override)
 
-    response = post_json(
-        rendering_client, "/internal/rendering/descriptor", request
-    )
+    response = post_json(rendering_client, "/internal/rendering/descriptor", request)
 
     assert response.status_code == 422, response.content
     assert store.presigns == []
@@ -546,9 +538,7 @@ def test_descriptor_refresh_reports_missing_storage_without_minting_a_url(
         "get_bytes",
         lambda *_args: (_ for _ in ()).throw(ArtifactNotFoundError("missing")),
     )
-    monkeypatch.setattr(
-        "apps.rendering.api.ArtifactStore.from_settings", lambda: store
-    )
+    monkeypatch.setattr("apps.rendering.api.ArtifactStore.from_settings", lambda: store)
 
     response = post_json(
         rendering_client,

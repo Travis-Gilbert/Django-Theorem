@@ -96,7 +96,7 @@ def test_compute_is_authenticated_cached_and_byte_deterministic(
             "W01": {"x": 60.0, "y": 24.0},
         }
 
-    monkeypatch.setattr("apps.layout.service.graphviz_version", lambda: "2.42.2")
+    monkeypatch.setattr("apps.layout.service.graphviz_version", lambda: "2.43.0")
     monkeypatch.setattr("apps.layout.service._execute_worker", deterministic_positions)
 
     first = post_json(admitted_client, request_payload())
@@ -112,7 +112,7 @@ def test_compute_is_authenticated_cached_and_byte_deterministic(
         {"id": "W01", "x_px": 60.0, "y_px": 24.0},
     ]
     assert response["engine"] == "dot"
-    assert response["graphviz_version"] == "2.42.2"
+    assert response["graphviz_version"] == "2.43.0"
     assert response["policy_id"] == "plan_dag"
     assert response["input_digest"].startswith("sha256:")
 
@@ -120,7 +120,7 @@ def test_compute_is_authenticated_cached_and_byte_deterministic(
 @pytest.mark.django_db
 def test_cache_is_tenant_scoped(admitted_client, monkeypatch):
     calls = []
-    monkeypatch.setattr("apps.layout.service.graphviz_version", lambda: "2.42.2")
+    monkeypatch.setattr("apps.layout.service.graphviz_version", lambda: "2.43.0")
     monkeypatch.setattr(
         "apps.layout.service._execute_worker",
         lambda _dot, _engine, node_ids, *, timeout_seconds: (
@@ -163,7 +163,7 @@ def test_cache_degrades_to_bounded_process_memory_when_valkey_fails(monkeypatch)
 
 @pytest.mark.django_db
 def test_machine_key_admission_fails_closed(admitted_client, monkeypatch):
-    monkeypatch.setattr("apps.layout.service.graphviz_version", lambda: "2.42.2")
+    monkeypatch.setattr("apps.layout.service.graphviz_version", lambda: "2.43.0")
     monkeypatch.setattr(
         "apps.layout.service._execute_worker",
         lambda _dot, _engine, node_ids: {

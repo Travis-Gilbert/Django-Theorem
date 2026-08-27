@@ -21,6 +21,15 @@ from apps.rendering.validation import validate_diagrams_source
 
 DIAGRAMS_WORKER_PATH = Path(__file__).with_name("diagrams_worker.py")
 SUPPORTS_RLIMIT_AS = sys.platform.startswith("linux")
+PLANTUML_JAVA_RUNTIME_FLAGS = (
+    "-Xms32m",
+    "-Xmx256m",
+    "-Xss512k",
+    "-XX:MaxMetaspaceSize=128m",
+    "-XX:CompressedClassSpaceSize=64m",
+    "-XX:ReservedCodeCacheSize=64m",
+    "-XX:MaxDirectMemorySize=64m",
+)
 
 
 class RenderExecutionError(RuntimeError):
@@ -33,10 +42,8 @@ class RenderExecutionTimeout(RenderExecutionError):
 
 def _resource_limits() -> None:
     cpu_seconds = int(getattr(settings, "RENDER_CPU_SECONDS", 10))
-    memory_bytes = int(getattr(settings, "RENDER_MEMORY_BYTES", 1024 * 1024 * 1024))
-    output_bytes = int(
-        getattr(settings, "RENDER_OUTPUT_MAX_BYTES", 16 * 1024 * 1024)
-    )
+    memory_bytes = int(getattr(settings, "RENDER_MEMORY_BYTES", 2 * 1024 * 1024 * 1024))
+    output_bytes = int(getattr(settings, "RENDER_OUTPUT_MAX_BYTES", 16 * 1024 * 1024))
     resource.setrlimit(resource.RLIMIT_CPU, (cpu_seconds, cpu_seconds))
     resource.setrlimit(resource.RLIMIT_FSIZE, (output_bytes, output_bytes))
     if SUPPORTS_RLIMIT_AS:
@@ -80,10 +87,11 @@ def _read_bounded(stream, limit: int) -> bytes:
 
 
 def _run(command: list[str], *, stdin: bytes, cwd: str | None = None) -> bytes:
-    output_limit = int(
-        getattr(settings, "RENDER_OUTPUT_MAX_BYTES", 16 * 1024 * 1024)
-    )
-    with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
+    output_limit = int(getattr(settings, "RENDER_OUTPUT_MAX_BYTES", 16 * 1024 * 1024))
+    with (
+        tempfile.TemporaryFile() as stdout_file,
+        tempfile.TemporaryFile() as stderr_file,
+    ):
         process = subprocess.Popen(
             command,
             cwd=cwd,
@@ -176,6 +184,21 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _plantuml_command(
+    jar_path: Path,
+    *arguments: str,
+    java_options: tuple[str, ...] = (),
+) -> list[str]:
+    return [
+        "java",
+        *PLANTUML_JAVA_RUNTIME_FLAGS,
+        *java_options,
+        "-jar",
+        str(jar_path),
+        *arguments,
+    ]
+
+
 def _verify_plantuml_runtime(jar_path: Path) -> str:
     expected_digest = str(settings.PLANTUML_SHA256).strip()
     if not re.fullmatch(r"[0-9a-f]{64}", expected_digest):
@@ -190,7 +213,7 @@ def _verify_plantuml_runtime(jar_path: Path) -> str:
     if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)+", expected_version):
         raise RenderExecutionError("PlantUML version configuration is malformed")
     version_output = _run(
-        ["java", "-jar", str(jar_path), "-version"],
+        _plantuml_command(jar_path, "-version"),
         stdin=b"",
     ).decode("utf-8", errors="replace")
     first_line = version_output.splitlines()[0] if version_output else ""
@@ -218,15 +241,13 @@ def render_plantuml(source: str) -> tuple[bytes, str, str]:
         raise RenderExecutionError("PlantUML security profile must be SANDBOX")
     version = _verify_plantuml_runtime(jar_path)
     payload = _run(
-        [
-            "java",
-            f"-DPLANTUML_SECURITY_PROFILE={security_profile}",
-            "-jar",
-            str(jar_path),
+        _plantuml_command(
+            jar_path,
             "-failfast2",
             "-tsvg",
             "-pipe",
-        ],
+            java_options=(f"-DPLANTUML_SECURITY_PROFILE={security_profile}",),
+        ),
         stdin=encoded,
     )
     root = _validate_svg(payload)
@@ -255,7 +276,9 @@ def render_diagrams(source: str, output_format: str) -> tuple[bytes, str, str]:
             receipt = json.loads(raw_receipt)
             output_path = Path(receipt["output_path"]).resolve(strict=True)
         except (json.JSONDecodeError, KeyError, OSError) as exc:
-            raise RenderExecutionError("diagrams worker returned an invalid receipt") from exc
+            raise RenderExecutionError(
+                "diagrams worker returned an invalid receipt"
+            ) from exc
         expected_path = Path(workdir).resolve() / f"render.{output_format}"
         if output_path != expected_path:
             raise RenderExecutionError("diagrams worker escaped its output directory")

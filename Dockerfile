@@ -1,5 +1,6 @@
 FROM python:3.12.12-slim-bookworm
 
+ARG DEBIAN_SNAPSHOT_TIMESTAMP=20260801T000000Z
 ARG GRAPHVIZ_DEBIAN_VERSION=2.42.2-7+deb12u1
 ARG DEFAULT_JRE_DEBIAN_VERSION=2:1.17-74
 ARG OPENJDK_DEBIAN_VERSION=17.0.20+8-1~deb12u1
@@ -9,6 +10,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1
 
 WORKDIR /app
+
+RUN printf '%s\n' \
+      "deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT_TIMESTAMP} bookworm main" \
+      "deb [check-valid-until=no] https://snapshot.debian.org/archive/debian-security/${DEBIAN_SNAPSHOT_TIMESTAMP} bookworm-security main" \
+      > /etc/apt/sources.list \
+    && rm -f /etc/apt/sources.list.d/debian.sources
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential \
@@ -42,6 +49,7 @@ ENV PLANTUML_JAR_PATH=/opt/plantuml/plantuml.jar \
     PLANTUML_SECURITY_PROFILE=SANDBOX \
     LAYOUT_SUBPROCESS_TIMEOUT_SECONDS=8 \
     RENDER_SUBPROCESS_TIMEOUT_SECONDS=12 \
+    RENDER_MEMORY_BYTES=2147483648 \
     RENDER_OUTPUT_MAX_BYTES=16777216
 EXPOSE 8000
 

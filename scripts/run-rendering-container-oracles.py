@@ -22,9 +22,7 @@ if str(REPOSITORY_ROOT) not in sys.path:
 from apps.rendering.oracle_process import BoundedProcessError  # noqa: E402
 from apps.rendering.oracle_process import run_bounded_process  # noqa: E402
 
-PLANTUML_SHA256 = (
-    "89948f14c93756c7a3fb7b69078ff37e8489fd79dd430c582b931e2f65358690"
-)
+PLANTUML_SHA256 = "89948f14c93756c7a3fb7b69078ff37e8489fd79dd430c582b931e2f65358690"
 MINIMUM_FREE_BYTES = 20 * 1024 * 1024 * 1024
 PROCESS_TIMEOUT_SECONDS = 30.0
 BUILD_TIMEOUT_SECONDS = 1_200.0
@@ -192,7 +190,9 @@ def inspect_runtime_candidates() -> tuple[RuntimeCandidate, ...]:
             continue
         if version_status != 0:
             inventory.append(
-                RuntimeCandidate(name, executable, "unusable", version or "version failed")
+                RuntimeCandidate(
+                    name, executable, "unusable", version or "version failed"
+                )
             )
             continue
         if name not in BUILD_CLIENTS:
@@ -254,14 +254,19 @@ def verify_declared_dockerfile(path: Path) -> None:
         raise ContainerOracleError(f"cannot read declared Dockerfile: {exc}") from exc
     required = (
         "FROM python:3.12.12-slim-bookworm",
+        "ARG DEBIAN_SNAPSHOT_TIMESTAMP=20260801T000000Z",
         "ARG GRAPHVIZ_DEBIAN_VERSION=2.42.2-7+deb12u1",
         "ARG DEFAULT_JRE_DEBIAN_VERSION=2:1.17-74",
         "ARG OPENJDK_DEBIAN_VERSION=17.0.20+8-1~deb12u1",
+        "https://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT_TIMESTAMP}",
+        "https://snapshot.debian.org/archive/debian-security/${DEBIAN_SNAPSHOT_TIMESTAMP}",
+        "rm -f /etc/apt/sources.list.d/debian.sources",
         "COPY requirements.txt .",
         "https://github.com/plantuml/plantuml/releases/download/v1.2026.6/plantuml-1.2026.6.jar",
         "PLANTUML_VERSION=1.2026.6",
         f"PLANTUML_SHA256={PLANTUML_SHA256}",
         "PLANTUML_SECURITY_PROFILE=SANDBOX",
+        "RENDER_MEMORY_BYTES=2147483648",
     )
     missing = [value for value in required if value not in contents]
     if missing:
@@ -325,7 +330,7 @@ def parse_java_version(output: str) -> str:
 
 def container_probe_script() -> str:
     return f"""set -eu
-# Graphviz 2.42.2
+# Debian Graphviz package 2.42.2-7+deb12u1 reports runtime 2.43.0
 # pygraphviz==2.0.1 and diagrams==0.25.1
 python - <<'PY'
 import importlib.metadata
@@ -346,7 +351,7 @@ match = re.fullmatch(
 )
 assert match is not None
 version = match.group("version")
-assert version == '2.42.2'
+assert version == '2.43.0'
 linked_version = ".".join(
     str(value)
     for value in (
@@ -445,17 +450,12 @@ def _remove_command(runtime: RuntimeCandidate, image_reference: str) -> list[str
 
 
 def new_image_tag(context_digest: str) -> str:
-    return (
-        f"theorem-rendering-oracle:{context_digest[:16]}-"
-        f"{secrets.token_hex(16)}"
-    )
+    return f"theorem-rendering-oracle:{context_digest[:16]}-{secrets.token_hex(16)}"
 
 
 def inspect_image_id(runtime: RuntimeCandidate, image_tag: str) -> str | None:
     status, output = _run_bounded(
-        _runtime_command(
-            runtime, "image", "inspect", "--format", "{{.Id}}", image_tag
-        ),
+        _runtime_command(runtime, "image", "inspect", "--format", "{{.Id}}", image_tag),
         timeout_seconds=PROCESS_TIMEOUT_SECONDS,
         cwd=REPOSITORY_ROOT,
         check=False,
@@ -548,7 +548,7 @@ def run_container_oracle(runtime: RuntimeCandidate) -> None:
     if free_bytes < MINIMUM_FREE_BYTES:
         raise ContainerOraclePrerequisiteError(
             "declared-image build requires at least 20 GiB free on the repository volume; "
-            f"found {free_bytes / (1024 ** 3):.1f} GiB"
+            f"found {free_bytes / (1024**3):.1f} GiB"
         )
     context_digest = hashlib.sha256(
         dockerfile.read_bytes()

@@ -205,7 +205,7 @@ def test_whole_layout_deadline_includes_graphviz_completion(monkeypatch):
         "apps.layout.service.get_cached_response",
         lambda *_args, **_kwargs: None,
     )
-    monkeypatch.setattr("apps.layout.service.graphviz_version", lambda: "2.42.2")
+    monkeypatch.setattr("apps.layout.service.graphviz_version", lambda: "2.43.0")
 
     def worker(_dot, _engine, node_ids, *, timeout_seconds):
         assert timeout_seconds == 8.0
@@ -259,7 +259,7 @@ def test_stalled_loopback_cache_is_bounded_and_layout_fails_open(monkeypatch):
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
     body = LayoutRequest.model_validate(_request_payload())
-    monkeypatch.setattr("apps.layout.service.graphviz_version", lambda: "2.42.2")
+    monkeypatch.setattr("apps.layout.service.graphviz_version", lambda: "2.43.0")
     monkeypatch.setattr(
         "apps.layout.service._execute_worker",
         lambda _dot, _engine, node_ids, *, timeout_seconds: {

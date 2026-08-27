@@ -37,7 +37,9 @@ def test_preflight_inventories_every_supported_runtime_candidate(monkeypatch):
         "orbctl",
     )
     assert all(item.status == "missing" for item in inventory)
-    with pytest.raises(runner.ContainerOraclePrerequisiteError, match="Docker-compatible"):
+    with pytest.raises(
+        runner.ContainerOraclePrerequisiteError, match="Docker-compatible"
+    ):
         runner.select_runtime(inventory)
 
 
@@ -49,11 +51,13 @@ def test_declared_dockerfile_contract_rejects_a_drifted_pin(tmp_path):
         runner.verify_declared_dockerfile(dockerfile)
 
 
+def test_checked_in_dockerfile_binds_apt_to_the_reviewed_snapshot():
+    runner.verify_declared_dockerfile(runner.REPOSITORY_ROOT / "Dockerfile")
+
+
 def test_declared_requirements_require_exact_python_renderer_pins(tmp_path):
     requirements = tmp_path / "requirements.txt"
-    requirements.write_text(
-        "pygraphviz==2.0.1\ndiagrams>=0.25.1\n", encoding="utf-8"
-    )
+    requirements.write_text("pygraphviz==2.0.1\ndiagrams>=0.25.1\n", encoding="utf-8")
 
     with pytest.raises(runner.ContainerOracleError, match="diagrams==0.25.1"):
         runner.verify_declared_requirements(requirements)
@@ -129,9 +133,7 @@ def test_dockerignore_verifier_rejects_semantic_reordering(tmp_path):
 
 
 @pytest.mark.parametrize("missing_pattern", runner.DOCKERIGNORE_REQUIRED_PATTERNS)
-def test_every_dockerignore_security_pattern_is_drift_gated(
-    tmp_path, missing_pattern
-):
+def test_every_dockerignore_security_pattern_is_drift_gated(tmp_path, missing_pattern):
     remaining = [
         pattern
         for pattern in runner.DOCKERIGNORE_REQUIRED_PATTERNS
@@ -154,9 +156,12 @@ def test_remote_runtime_endpoints_are_refused(endpoint):
 
 
 def test_local_unix_runtime_endpoint_is_admitted():
-    assert runner.require_local_runtime_endpoint(
-        "unix:///Users/example/.docker/run/docker.sock"
-    ) == "/Users/example/.docker/run/docker.sock"
+    assert (
+        runner.require_local_runtime_endpoint(
+            "unix:///Users/example/.docker/run/docker.sock"
+        )
+        == "/Users/example/.docker/run/docker.sock"
+    )
 
 
 def test_runtime_commands_remain_bound_to_the_proven_local_endpoint(tmp_path):
@@ -174,7 +179,7 @@ def test_runtime_commands_remain_bound_to_the_proven_local_endpoint(tmp_path):
 @pytest.mark.parametrize(
     ("output", "expected"),
     (
-        ("dot - graphviz version 2.42.2 (0)", "2.42.2"),
+        ("dot - graphviz version 2.43.0 (0)", "2.43.0"),
         ('openjdk version "17.0.20" 2026-01-20', "17.0.20"),
     ),
 )
@@ -188,12 +193,12 @@ def test_exact_runtime_version_parsers(output, expected):
 
 
 def test_near_match_runtime_versions_are_not_exact():
-    assert runner.parse_graphviz_version(
-        "dot - graphviz version 2.42.20 (0)"
-    ) != "2.42.2"
-    assert runner.parse_java_version(
-        'openjdk version "17.0.200" 2026-01-20'
-    ) != "17.0.20"
+    assert (
+        runner.parse_graphviz_version("dot - graphviz version 2.42.20 (0)") != "2.43.0"
+    )
+    assert (
+        runner.parse_java_version('openjdk version "17.0.200" 2026-01-20') != "17.0.20"
+    )
 
 
 def test_per_invocation_tags_use_a_random_nonce(monkeypatch):
@@ -234,7 +239,9 @@ def test_concurrent_retag_is_not_deleted(monkeypatch):
     monkeypatch.setattr(
         runner,
         "_run_bounded",
-        lambda *_args, **_kwargs: pytest.fail("concurrently retagged image was deleted"),
+        lambda *_args, **_kwargs: pytest.fail(
+            "concurrently retagged image was deleted"
+        ),
     )
 
     with pytest.raises(runner.ContainerOracleError, match="ownership changed"):
@@ -281,7 +288,9 @@ def test_cleanup_failure_preserves_the_primary_failure():
     primary = runner.ContainerOracleError("probe failed")
     cleanup = runner.ContainerOracleError("cleanup failed")
 
-    with pytest.raises(runner.ContainerOracleError, match="probe failed.*cleanup failed"):
+    with pytest.raises(
+        runner.ContainerOracleError, match="probe failed.*cleanup failed"
+    ):
         runner.raise_after_cleanup(primary, cleanup)
 
 
@@ -289,7 +298,7 @@ def test_container_probe_covers_every_declared_runtime_assertion():
     probe = runner.container_probe_script()
 
     for required in (
-        "Graphviz 2.42.2",
+        "Debian Graphviz package 2.42.2-7+deb12u1 reports runtime 2.43.0",
         "pygraphviz==2.0.1",
         "diagrams==0.25.1",
         "OpenJDK 17.0.20",
@@ -301,5 +310,5 @@ def test_container_probe_covers_every_declared_runtime_assertion():
     ):
         assert required in probe
 
-    assert "version == '2.42.2'" in probe
+    assert "version == '2.43.0'" in probe
     assert "version == '17.0.20'" in probe
