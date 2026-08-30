@@ -2,16 +2,7 @@
 
 **The control plane and data science lab for [Theorem](https://github.com/Travis-Gilbert), an agent harness built on a Rust graph substrate.**
 
-This is the Django service that handles the business half of running an intelligent system as a product: multi-tenancy, identity, billing, machine API keys, feature flags — and a compute-offload orchestrator that ships tenant-bound data science jobs (Python on RunPod GPUs, R on a dedicated Fly worker) with content-addressed provenance on every result.
-
-Design decisions worth noting:
-
-- **Fail-closed tenancy.** Callers never submit a `tenant_id`; identity derives from the machine key alone, jobs are filtered to the admitted tenant, and reusing an idempotency key with a changed payload is refused.
-- **Descriptors cross the wire, not data.** GPU workers exchange Arrow artifacts through short-lived presigned URLs scoped under `tenants/<id>/`; Django independently downloads and verifies digest, schema, and row count before a job may succeed. No S3 credential ever reaches a caller or worker.
-- **Provenance is not optional.** Worker image digests, R lockfile hashes, and scoring snapshots are stamped onto results so any output can be traced to the exact code that produced it.
-- **Contract-tested boundary with Rust.** The Rust read-model's view of the control schema is enforced by a cargo contract test wired to run on every Django migration change, so column drift fails CI before clients break.
-
-The rest of this README is the operator's reference for the service itself.
+Theorem is a rust, rust is the runtime. Django-theorem is how we improve the runtime.
 
 ---
 
