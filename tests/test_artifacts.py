@@ -6,8 +6,10 @@ from uuid import uuid4
 
 import pyarrow as pa
 import pytest
+from botocore.exceptions import ClientError
 
 from apps.orchestration.artifacts import (
+    ArtifactNotFoundError,
     ArtifactStore,
     ArtifactValidationError,
     arrow_schema_json,
@@ -81,6 +83,22 @@ def test_artifact_store_rejects_cross_tenant_object_keys(store):
         store.presign_get(other, owner_key)
 
 
+def test_artifact_store_classifies_a_missing_object_separately(store):
+    tenant_id = uuid4()
+    artifact_key = store.allocate_input_key(tenant_id)
+
+    def missing_object(**_kwargs):
+        raise ClientError(
+            {"Error": {"Code": "NoSuchKey", "Message": "missing"}},
+            "GetObject",
+        )
+
+    store.client.get_object = missing_object
+
+    with pytest.raises(ArtifactNotFoundError):
+        store.get_bytes(tenant_id, artifact_key)
+
+
 def test_competence_artifact_keys_are_content_addressed_and_exactly_scoped(store):
     tenant_id, project_id = uuid4(), uuid4()
     digest = "sha256:" + "a" * 64
@@ -124,6 +142,30 @@ def test_competence_artifacts_are_written_read_back_and_content_addressed(store)
         store.client.content_types[(store.bucket, stored.artifact_key)]
         == "application/vnd.theorem.competence-scorer+json"
     )
+
+
+@pytest.mark.parametrize(
+    "payload,media_type,extension",
+    [
+        (b"\x89PNG\r\n\x1a\nfixture", "image/png", "png"),
+        (b'<svg xmlns="http://www.w3.org/2000/svg"></svg>', "image/svg+xml", "svg"),
+    ],
+)
+def test_render_artifacts_are_content_addressed_and_read_back(
+    store, payload, media_type, extension
+):
+    tenant_id = uuid4()
+    stored = store.write_render_artifact(
+        tenant_id,
+        payload,
+        media_type=media_type,
+    )
+
+    digest_hex = sha256_digest(payload).removeprefix("sha256:")
+    assert stored.artifact_key == f"tenants/{tenant_id}/renders/{digest_hex}.{extension}"
+    assert stored.payload_digest == sha256_digest(payload)
+    assert store.get_bytes(tenant_id, stored.artifact_key) == payload
+    assert store.client.content_types[(store.bucket, stored.artifact_key)] == media_type
 
 
 def test_presigned_urls_keep_the_bucket_in_the_path_for_neon_endpoints():

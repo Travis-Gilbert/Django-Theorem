@@ -1,0 +1,51 @@
+# Isolated hosted oracle for the graph layout service. This app intentionally
+# carries no production Postgres, Valkey, RunPod, or object-storage authority.
+app = "travis-django-theorem-layout-test"
+primary_region = "iad"
+kill_signal = "SIGTERM"
+kill_timeout = "30s"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8000"
+  DEBUG = "False"
+  ALLOWED_HOSTS = "travis-django-theorem-layout-test.fly.dev"
+  DATABASE_URL = "sqlite:////data/db.sqlite3"
+  MIGRATE_DATABASE_URL = "sqlite:////data/db.sqlite3"
+  DISABLE_SERVER_SIDE_CURSORS = "True"
+  CONN_MAX_AGE = "0"
+  OFFLOAD_EXECUTION_MODE = "stub"
+  VALKEY_URL = ""
+
+[processes]
+  web = "sh -c 'python manage.py migrate --noinput && exec gunicorn theorem_control.wsgi:application --bind 0.0.0.0:${PORT:-8000} --workers 2'"
+
+[[mounts]]
+  source = "layout_test_data"
+  destination = "/data"
+  processes = ["web"]
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["web"]
+
+  [[http_service.checks]]
+    interval = "15s"
+    timeout = "10s"
+    grace_period = "30s"
+    method = "GET"
+    path = "/healthz"
+    protocol = "http"
+    headers = { Host = "travis-django-theorem-layout-test.fly.dev", X-Forwarded-Proto = "https" }
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory = "512mb"
+  processes = ["web"]

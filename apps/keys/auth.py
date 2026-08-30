@@ -21,6 +21,10 @@ COMPETENCE_FIT_SCOPE = "competence:fit"
 COMPETENCE_READ_SCOPE = "competence:read"
 COMPETENCE_CLEANUP_SCOPE = "competence:cleanup"
 COMPETENCE_WILDCARD_SCOPE = "competence:*"
+LAYOUT_COMPUTE_SCOPE = "layout:compute"
+LAYOUT_WILDCARD_SCOPE = "layout:*"
+RENDERING_RENDER_SCOPE = "rendering:render"
+RENDERING_WILDCARD_SCOPE = "rendering:*"
 
 
 @dataclass(frozen=True)
@@ -44,15 +48,9 @@ def _scope_allows(scopes: object, required_scope: str) -> bool:
     if not isinstance(scopes, list):
         return False
     granted = {scope for scope in scopes if isinstance(scope, str)}
-    return (
-        "*" in granted
-        or required_scope in granted
-        or (required_scope.startswith("offload:") and OFFLOAD_WILDCARD_SCOPE in granted)
-        or (
-            required_scope.startswith("competence:")
-            and COMPETENCE_WILDCARD_SCOPE in granted
-        )
-    )
+    domain, separator, _action = required_scope.partition(":")
+    wildcard = f"{domain}:*" if separator else ""
+    return "*" in granted or required_scope in granted or wildcard in granted
 
 
 def require_machine_key(request: HttpRequest, *, scope: str) -> ApiKeyPrincipal:

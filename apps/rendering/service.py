@@ -1,0 +1,301 @@
+"""Bounded PlantUML and Diagrams execution."""
+
+from __future__ import annotations
+
+import hashlib
+import importlib.metadata
+import json
+import os
+import re
+import resource
+import signal
+import subprocess
+import sys
+import tempfile
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+from django.conf import settings
+
+from apps.rendering.validation import validate_diagrams_source
+
+DIAGRAMS_WORKER_PATH = Path(__file__).with_name("diagrams_worker.py")
+SUPPORTS_RLIMIT_AS = sys.platform.startswith("linux")
+PLANTUML_JAVA_RUNTIME_FLAGS = (
+    "-Xms32m",
+    "-Xmx256m",
+    "-Xss512k",
+    "-XX:MaxMetaspaceSize=128m",
+    "-XX:CompressedClassSpaceSize=64m",
+    "-XX:ReservedCodeCacheSize=64m",
+    "-XX:MaxDirectMemorySize=64m",
+)
+
+
+class RenderExecutionError(RuntimeError):
+    pass
+
+
+class RenderExecutionTimeout(RenderExecutionError):
+    pass
+
+
+def _resource_limits() -> None:
+    cpu_seconds = int(getattr(settings, "RENDER_CPU_SECONDS", 10))
+    memory_bytes = int(getattr(settings, "RENDER_MEMORY_BYTES", 2 * 1024 * 1024 * 1024))
+    output_bytes = int(getattr(settings, "RENDER_OUTPUT_MAX_BYTES", 16 * 1024 * 1024))
+    resource.setrlimit(resource.RLIMIT_CPU, (cpu_seconds, cpu_seconds))
+    resource.setrlimit(resource.RLIMIT_FSIZE, (output_bytes, output_bytes))
+    if SUPPORTS_RLIMIT_AS:
+        resource.setrlimit(resource.RLIMIT_AS, (memory_bytes, memory_bytes))
+
+
+def _subprocess_environment() -> dict[str, str]:
+    """Return a credential-free environment with only renderer necessities."""
+
+    environment = {
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "PATH": "/usr/local/bin:/usr/bin:/bin",
+        "PLANTUML_SECURITY_PROFILE": str(settings.PLANTUML_SECURITY_PROFILE),
+        "PYTHONHASHSEED": "0",
+    }
+    graphviz_bin = str(getattr(settings, "RENDER_GRAPHVIZ_BIN_DIR", "")).strip()
+    if graphviz_bin:
+        candidate = Path(graphviz_bin)
+        if not candidate.is_absolute():
+            raise RenderExecutionError(
+                "RENDER_GRAPHVIZ_BIN_DIR must be an absolute directory"
+            )
+        try:
+            resolved = candidate.resolve(strict=True)
+        except OSError as exc:
+            raise RenderExecutionError(
+                "RENDER_GRAPHVIZ_BIN_DIR is unavailable"
+            ) from exc
+        if not resolved.is_dir():
+            raise RenderExecutionError(
+                "RENDER_GRAPHVIZ_BIN_DIR must resolve to a directory"
+            )
+        environment["PATH"] = f"{resolved}:{environment['PATH']}"
+    return environment
+
+
+def _read_bounded(stream, limit: int) -> bytes:
+    stream.seek(0)
+    return stream.read(limit + 1)
+
+
+def _run(command: list[str], *, stdin: bytes, cwd: str | None = None) -> bytes:
+    output_limit = int(getattr(settings, "RENDER_OUTPUT_MAX_BYTES", 16 * 1024 * 1024))
+    with (
+        tempfile.TemporaryFile() as stdout_file,
+        tempfile.TemporaryFile() as stderr_file,
+    ):
+        process = subprocess.Popen(
+            command,
+            cwd=cwd,
+            env=_subprocess_environment(),
+            stdin=subprocess.PIPE,
+            stdout=stdout_file,
+            stderr=stderr_file,
+            start_new_session=True,
+            preexec_fn=_resource_limits,
+        )
+        try:
+            process.communicate(
+                stdin,
+                timeout=float(
+                    getattr(settings, "RENDER_SUBPROCESS_TIMEOUT_SECONDS", 12.0)
+                ),
+            )
+        except subprocess.TimeoutExpired as exc:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.communicate()
+            raise RenderExecutionTimeout("render exceeded its deadline") from exc
+
+        stdout_size = os.fstat(stdout_file.fileno()).st_size
+        stderr_size = os.fstat(stderr_file.fileno()).st_size
+        stderr = _read_bounded(stderr_file, 1_000)
+        size_limited = (
+            process.returncode == -signal.SIGXFSZ
+            or stdout_size > output_limit
+            or (
+                process.returncode != 0
+                and (stdout_size >= output_limit or stderr_size >= output_limit)
+            )
+        )
+        if size_limited:
+            raise RenderExecutionError("render output exceeded its size cap")
+        if process.returncode != 0:
+            detail = stderr.decode("utf-8", errors="replace")[:1_000]
+            raise RenderExecutionError(f"renderer failed: {detail}")
+        stdout = _read_bounded(stdout_file, output_limit)
+        if not stdout:
+            raise RenderExecutionError("renderer returned no output")
+        if len(stdout) > output_limit:
+            raise RenderExecutionError("render output exceeded its size cap")
+        return stdout
+
+
+def _validate_svg(payload: bytes) -> ET.Element:
+    lowered = payload.lower()
+    if b"<svg" not in lowered[:1_000] or any(
+        forbidden in lowered
+        for forbidden in (b"<script", b"<foreignobject", b"javascript:")
+    ):
+        raise RenderExecutionError("renderer returned unsafe SVG")
+    try:
+        root = ET.fromstring(payload)
+    except ET.ParseError as exc:
+        raise RenderExecutionError("renderer returned malformed SVG") from exc
+    if root.tag.rsplit("}", 1)[-1] != "svg":
+        raise RenderExecutionError("renderer returned malformed SVG")
+    return root
+
+
+def _is_plantuml_diagnostic_svg(root: ET.Element) -> bool:
+    """Recognize PlantUML's untyped, bold-red renderer error document."""
+
+    if root.attrib.get("data-diagram-type"):
+        return False
+    for element in root.iter():
+        if element.tag.rsplit("}", 1)[-1] != "text":
+            continue
+        if element.attrib.get("fill", "").upper() != "#FF0000":
+            continue
+        if element.attrib.get("font-weight") != "700":
+            continue
+        message = "".join(element.itertext()).strip().casefold()
+        if (
+            message == "cannot open url"
+            or message.startswith("cannot include")
+            or message == "syntax error?"
+        ):
+            return True
+    return False
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as jar:
+        while chunk := jar.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _plantuml_command(
+    jar_path: Path,
+    *arguments: str,
+    java_options: tuple[str, ...] = (),
+) -> list[str]:
+    return [
+        "java",
+        *PLANTUML_JAVA_RUNTIME_FLAGS,
+        *java_options,
+        "-jar",
+        str(jar_path),
+        *arguments,
+    ]
+
+
+def _verify_plantuml_runtime(jar_path: Path) -> str:
+    expected_digest = str(settings.PLANTUML_SHA256).strip()
+    if not re.fullmatch(r"[0-9a-f]{64}", expected_digest):
+        raise RenderExecutionError("PlantUML checksum configuration is malformed")
+    actual_digest = _sha256_file(jar_path)
+    if actual_digest != expected_digest:
+        raise RenderExecutionError(
+            f"PlantUML checksum mismatch: {actual_digest} != {expected_digest}"
+        )
+
+    expected_version = str(settings.PLANTUML_VERSION).strip()
+    if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)+", expected_version):
+        raise RenderExecutionError("PlantUML version configuration is malformed")
+    version_output = _run(
+        _plantuml_command(jar_path, "-version"),
+        stdin=b"",
+    ).decode("utf-8", errors="replace")
+    first_line = version_output.splitlines()[0] if version_output else ""
+    match = re.fullmatch(
+        r"PlantUML version (?P<version>[0-9]+(?:\.[0-9]+)+)(?: / .+)?",
+        first_line,
+    )
+    if match is None or match.group("version") != expected_version:
+        raise RenderExecutionError(
+            f"PlantUML release identity mismatch: {first_line!r}"
+        )
+    return expected_version
+
+
+def render_plantuml(source: str) -> tuple[bytes, str, str]:
+    encoded = source.encode("utf-8")
+    max_source = int(getattr(settings, "RENDER_MAX_SOURCE_BYTES", 256 * 1024))
+    if not encoded or len(encoded) > max_source:
+        raise ValueError("source must be non-empty and within its size cap")
+    jar_path = Path(settings.PLANTUML_JAR_PATH)
+    if not jar_path.is_file():
+        raise RenderExecutionError("pinned PlantUML jar is unavailable")
+    security_profile = str(settings.PLANTUML_SECURITY_PROFILE)
+    if security_profile != "SANDBOX":
+        raise RenderExecutionError("PlantUML security profile must be SANDBOX")
+    version = _verify_plantuml_runtime(jar_path)
+    payload = _run(
+        _plantuml_command(
+            jar_path,
+            "-failfast2",
+            "-tsvg",
+            "-pipe",
+            java_options=(f"-DPLANTUML_SECURITY_PROFILE={security_profile}",),
+        ),
+        stdin=encoded,
+    )
+    root = _validate_svg(payload)
+    if _is_plantuml_diagnostic_svg(root):
+        raise RenderExecutionError("PlantUML returned a diagnostic SVG")
+    return payload, "image/svg+xml", version
+
+
+def render_diagrams(source: str, output_format: str) -> tuple[bytes, str, str]:
+    validate_diagrams_source(
+        source,
+        max_bytes=int(getattr(settings, "RENDER_MAX_SOURCE_BYTES", 256 * 1024)),
+    )
+    with tempfile.TemporaryDirectory(prefix="theorem-diagrams-") as workdir:
+        request = json.dumps(
+            {"source": source, "format": output_format, "workdir": workdir},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        raw_receipt = _run(
+            [sys.executable, "-I", str(DIAGRAMS_WORKER_PATH)],
+            stdin=request,
+            cwd=workdir,
+        )
+        try:
+            receipt = json.loads(raw_receipt)
+            output_path = Path(receipt["output_path"]).resolve(strict=True)
+        except (json.JSONDecodeError, KeyError, OSError) as exc:
+            raise RenderExecutionError(
+                "diagrams worker returned an invalid receipt"
+            ) from exc
+        expected_path = Path(workdir).resolve() / f"render.{output_format}"
+        if output_path != expected_path:
+            raise RenderExecutionError("diagrams worker escaped its output directory")
+        output_limit = int(
+            getattr(settings, "RENDER_OUTPUT_MAX_BYTES", 16 * 1024 * 1024)
+        )
+        if output_path.stat().st_size > output_limit:
+            raise RenderExecutionError("render output violated its size cap")
+        with output_path.open("rb") as output_file:
+            payload = output_file.read(output_limit + 1)
+        if not payload or len(payload) > output_limit:
+            raise RenderExecutionError("render output violated its size cap")
+    if output_format == "svg":
+        _validate_svg(payload)
+        media_type = "image/svg+xml"
+    else:
+        if not payload.startswith(b"\x89PNG\r\n\x1a\n"):
+            raise RenderExecutionError("diagrams returned invalid PNG")
+        media_type = "image/png"
+    return payload, media_type, importlib.metadata.version("diagrams")
