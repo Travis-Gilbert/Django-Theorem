@@ -112,6 +112,10 @@ def run_offload_python(job_id: str) -> dict:
             f"unsupported OFFLOAD_EXECUTION_MODE={settings.OFFLOAD_EXECUTION_MODE!r}",
             log_prefix="RunPod",
         )
+    if _is_extraction_operation_for_dispatch(job_id):
+        from apps.extraction.tasks import complete_extraction_stub
+
+        return complete_extraction_stub(job_id)
     # Explicit deterministic stand-in for local/tests only. It is never a live
     # data-science oracle.
     return _complete_stub(
@@ -120,6 +124,25 @@ def run_offload_python(job_id: str) -> dict:
         agent_name="theorem-control-plane",
         code_ref="stub-local",
     )
+
+
+def _is_extraction_operation_for_dispatch(job_id: str) -> bool:
+    from apps.orchestration.models import Job
+
+    operation = Job.objects.filter(id=job_id).values_list("operation", flat=True).first()
+    return isinstance(operation, str) and operation.startswith("data_science.extraction.")
+
+
+def _runpod_endpoint_id(operation: str) -> str:
+    if operation.startswith("data_science.extraction."):
+        return settings.RUNPOD_EXTRACTION_ENDPOINT_ID
+    return settings.RUNPOD_SERVERLESS_ENDPOINT_ID
+
+
+def _runpod_image_digest(operation: str) -> str:
+    if operation.startswith("data_science.extraction."):
+        return settings.RUNPOD_EXTRACTION_IMAGE_DIGEST
+    return settings.RUNPOD_WORKER_IMAGE_DIGEST
 
 
 @shared_task(name="apps.orchestration.tasks.run_offload_r", queue="offload.r")
@@ -227,7 +250,7 @@ def _runpod_input(job, *, store: ArtifactStore, output_artifact_key: str) -> dic
         },
         "params": job.kwargs_json.get("params") or {},
         # Pass artifact max bytes to worker to keep limits consistent (P2: Keep artifact limits consistent)
-        "max_bytes": store.max_bytes,
+        "max_bytes": getattr(store, "max_bytes", settings.ARTIFACT_MAX_BYTES),
     }
 
 
@@ -322,21 +345,29 @@ def _run_runpod_offload(job_id: str) -> dict[str, str]:
             raise ArtifactValidationError("RunPod jobs require an admitted tenant")
         store = ArtifactStore.from_settings()
         output_artifact_key = store.output_key(job.tenant_id, job.operation_id)
+        endpoint_id = _runpod_endpoint_id(job.operation)
+        image_digest = _runpod_image_digest(job.operation)
+        if not endpoint_id:
+            raise RunpodConfigurationError(
+                "RunPod endpoint id is required for the selected operation"
+            )
+        if not image_digest:
+            raise RunpodConfigurationError(
+                "RunPod worker image digest is required for provenance"
+            )
         client = RunpodServerlessClient(
             api_key=settings.RUNPOD_API_KEY,
-            endpoint_id=settings.RUNPOD_SERVERLESS_ENDPOINT_ID,
+            endpoint_id=endpoint_id,
             base_url=settings.RUNPOD_API_BASE,
             timeout_seconds=settings.RUNPOD_REQUEST_TIMEOUT_SECONDS,
         )
-        if not settings.RUNPOD_WORKER_IMAGE_DIGEST:
-            raise RunpodConfigurationError("RUNPOD_WORKER_IMAGE_DIGEST is required for provenance")
         submitted = client.submit(
             _runpod_input(job, store=store, output_artifact_key=output_artifact_key)
         )
         metadata = dict(job.kwargs_json)
         metadata["output_artifact_key"] = output_artifact_key
         metadata["runpod"] = {
-            "endpoint_id": settings.RUNPOD_SERVERLESS_ENDPOINT_ID,
+            "endpoint_id": endpoint_id,
             "job_id": submitted.job_id,
         }
         job.kwargs_json = metadata
@@ -429,7 +460,7 @@ def _run_runpod_offload(job_id: str) -> dict[str, str]:
         job,
         engine="runpod-serverless",
         agent_name="theorem-control-plane",
-        code_ref=settings.RUNPOD_WORKER_IMAGE_DIGEST,
+        code_ref=image_digest,
     )
     return {
         "status": "succeeded",
@@ -560,9 +591,17 @@ def cancel_job_task(job_id: str) -> dict:
     remote_job_id = (job.kwargs_json.get("runpod") or {}).get("job_id")
     if remote_job_id and settings.OFFLOAD_EXECUTION_MODE == "runpod":
         try:
+            runpod_metadata = job.kwargs_json.get("runpod") or {}
+            persisted_endpoint = (
+                runpod_metadata.get("endpoint_id")
+                if isinstance(runpod_metadata, Mapping)
+                else ""
+            )
             RunpodServerlessClient(
                 api_key=settings.RUNPOD_API_KEY,
-                endpoint_id=settings.RUNPOD_SERVERLESS_ENDPOINT_ID,
+                endpoint_id=str(
+                    persisted_endpoint or _runpod_endpoint_id(job.operation)
+                ),
                 base_url=settings.RUNPOD_API_BASE,
                 timeout_seconds=settings.RUNPOD_REQUEST_TIMEOUT_SECONDS,
             ).cancel(str(remote_job_id))

@@ -84,8 +84,16 @@ def test_worker_refuses_registered_operations_without_a_real_runner():
 def test_worker_executes_community_assignment_through_signed_artifact_capabilities(monkeypatch):
     payload = _edge_payload()
     uploaded = {}
-    monkeypatch.setattr(worker, "_download", lambda url: payload)
-    monkeypatch.setattr(worker, "_upload", lambda url, body: uploaded.update(url=url, body=body))
+    monkeypatch.setattr(
+        worker,
+        "_download",
+        lambda url, *, max_bytes: payload,
+    )
+    monkeypatch.setattr(
+        worker,
+        "_upload",
+        lambda url, body, *, max_bytes: uploaded.update(url=url, body=body),
+    )
 
     result = worker.handler(
         {"input": _request(payload=payload, operation="data_science.community.assign")}

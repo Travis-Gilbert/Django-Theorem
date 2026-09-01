@@ -83,6 +83,33 @@ def test_d3_columns_present():
             "revoked_at",
             "expires_at",
         },
+        "control_extractionjob": {
+            "id",
+            "tenant_id",
+            "operation",
+            "contract_version",
+            "source_kind",
+            "source_ref",
+            "params",
+            "params_hash",
+            "status",
+            "shard_count",
+            "rows_total",
+            "created_at",
+            "updated_at",
+        },
+        "control_extractionreview": {
+            "id",
+            "tenant_id",
+            "job_id",
+            "candidate_digest",
+            "claim_id",
+            "decision",
+            "merge_target_claim_id",
+            "reason",
+            "reviewer",
+            "created_at",
+        },
     }
     with connection.cursor() as cursor:
         for table, cols in expected.items():
@@ -157,5 +184,59 @@ def test_theorem_spine_can_select_control_tenant():
         try:
             cursor.execute("SELECT id, slug, display_name, is_active FROM control.control_tenant LIMIT 1")
             cursor.fetchall()
+        finally:
+            cursor.execute("RESET ROLE")
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("table", "columns"),
+    [
+        (
+            "control_extractionjob",
+            "id, tenant_id, operation, contract_version, source_kind, source_ref, "
+            "params, params_hash, status, shard_count, rows_total, created_at, updated_at",
+        ),
+        (
+            "control_extractionreview",
+            "id, tenant_id, job_id, candidate_digest, claim_id, decision, "
+            "merge_target_claim_id, reason, reviewer, created_at",
+        ),
+    ],
+)
+def test_theorem_spine_can_select_extraction_read_models(table, columns):
+    ok, reason = _roles_applied()
+    if not ok:
+        pytest.skip(reason)
+    with connection.cursor() as cursor:
+        try:
+            cursor.execute("SET ROLE theorem_spine")
+        except DatabaseError as exc:
+            pytest.skip(f"cannot SET ROLE theorem_spine: {exc}")
+        try:
+            cursor.execute(f"SELECT {columns} FROM control.{table} LIMIT 1")
+            cursor.fetchall()
+        finally:
+            cursor.execute("RESET ROLE")
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "table",
+    ["control_extractionjob", "control_extractionreview"],
+)
+def test_theorem_spine_cannot_insert_extraction_read_models(table):
+    ok, reason = _roles_applied()
+    if not ok:
+        pytest.skip(reason)
+    with connection.cursor() as cursor:
+        try:
+            cursor.execute("SET ROLE theorem_spine")
+        except DatabaseError as exc:
+            pytest.skip(f"cannot SET ROLE theorem_spine: {exc}")
+        try:
+            with pytest.raises(DatabaseError) as excinfo:
+                cursor.execute(f"INSERT INTO control.{table} DEFAULT VALUES")
+            assert _permission_denied(excinfo.value), excinfo.value
         finally:
             cursor.execute("RESET ROLE")

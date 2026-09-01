@@ -1,0 +1,45 @@
+name: Publish Theorem extraction worker
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - contracts/theorem.extraction.v1.json
+      - runpod/theorem_extraction_worker/**
+      - .github/workflows/publish-theorem-extraction-worker.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: metadata
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/django-theorem-extraction-worker
+          tags: |
+            type=sha,prefix=
+            type=raw,value=latest
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: runpod/theorem_extraction_worker/Dockerfile
+          push: true
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          secrets: |
+            hf_token=${{ secrets.HF_TOKEN }}

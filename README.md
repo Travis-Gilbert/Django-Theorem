@@ -79,10 +79,15 @@ preflight as the Fly R worker before starting Celery.
 | `RUNPOD_API_KEY` | RunPod Serverless API key (Fly secret) |
 | `RUNPOD_SERVERLESS_ENDPOINT_ID` | Queue-based endpoint that accepts `theorem.offload.v1` jobs (Fly secret) |
 | `RUNPOD_WORKER_IMAGE_DIGEST` | Immutable worker image digest stamped on RunPod provenance |
+| `RUNPOD_EXTRACTION_ENDPOINT_ID` | Dedicated queue endpoint for the pinned extraction worker image |
+| `RUNPOD_EXTRACTION_IMAGE_DIGEST` | Immutable extraction image digest stamped on extraction provenance |
 | `RUNPOD_JOB_TIMEOUT_SECONDS` | Control-plane deadline; timeout cancels the RunPod job |
 | `R_OFFLOAD_EXECUTION_MODE` | `stub` for local/tests; `rpy2` only in the R worker image |
 | `THEOREM_API_BASE` | Rust API base for provenance write-back |
 | `THEOREM_MACHINE_KEY` | Bearer key scoped `provenance:write` |
+| `THEOREM_MACHINE_KEY_PASSAGES` | Bearer key scoped `passages:read` for web and life-email source planning |
+| `EXTRACTION_MAX_INPUT_BYTES` | Encoded Arrow shard ceiling; default `ARTIFACT_MAX_BYTES // 4` |
+| `EXTRACTION_SWEEP_INTERVAL_SECONDS` | Extraction reconciliation beat interval (default 300) |
 | `RENV_LOCKFILE_PATH` | Pinned R worker `renv.lock`; SHA-256 becomes provenance `code_ref` |
 | `DISABLE_SERVER_SIDE_CURSORS` | Must be `True` under PgBouncer transaction pooling |
 | `CONN_MAX_AGE` | Must be `0` under PgBouncer |
@@ -104,7 +109,7 @@ preflight as the Fly R worker before starting Celery.
 See `sql/roles.sql`:
 
 - `theorem_control` owns schema `control`
-- `theorem_spine` owns schema `spine`, `SELECT` only on the five D3 tables
+- `theorem_spine` owns schema `spine`, with column-limited `SELECT` on D3 read models
 
 Django sets `search_path=control,public`. Settings force
 `DISABLE_SERVER_SIDE_CURSORS=True` and `CONN_MAX_AGE=0`.
@@ -118,6 +123,8 @@ Django sets `search_path=control,public`. Settings force
 | `control_subscription` | `tenant_id`, `plan_code`, `status` |
 | `control_plan` | `code`, `limits` |
 | `control_apikey` | `id`, `tenant_id`, `key_hash`, `scopes`, `revoked_at`, `expires_at` |
+| `control_extractionjob` | `id`, `tenant_id`, `operation`, `contract_version`, `source_kind`, `source_ref`, `params`, `params_hash`, `status`, `shard_count`, `rows_total`, `created_at`, `updated_at` |
+| `control_extractionreview` | `id`, `tenant_id`, `job_id`, `candidate_digest`, `claim_id`, `decision`, `merge_target_claim_id`, `reason`, `reviewer`, `created_at` |
 
 ## HTTP surface
 
@@ -126,6 +133,11 @@ Django sets `search_path=control,public`. Settings force
 - `POST /internal/offload/artifact-upload` — mint a tenant-scoped, short-lived Arrow upload URL
 - `GET /internal/offload/{job_id}` — return the caller tenant's job status + ArrowBatch descriptor
 - `POST /internal/offload/{job_id}/cancel` — cancel the caller tenant's job
+- `POST /internal/extraction/submit` — plan and fan out a tenant corpus extraction
+- `GET /internal/extraction/{job_id}` — return extraction and per-shard Arrow descriptors
+- `POST /internal/extraction/{job_id}/cancel` — cancel every non-terminal shard
+- `POST /internal/extraction/review` — append candidate review decisions
+- `GET /internal/extraction/review?since=<iso>` — stream decisions for non-spine callers
 - `POST /internal/competence/fit` — submit a tenant/project-bound competence fit
 - `POST /internal/competence/refit` — submit a refit bound to a previous scorer
 - `GET /internal/competence/jobs/{job_id}` — inspect fit/refit state and artifacts
@@ -151,6 +163,36 @@ never submit a `tenant_id`. Grant only the scopes required by the caller:
 
 `offload:*` grants all three offload scopes. Revoked, expired, inactive-tenant,
 or unknown keys are refused; job lookups are filtered to the admitted tenant.
+
+### Extraction machine-key admission
+
+Extraction routes use `extraction:submit`, `extraction:read`, and
+`extraction:review`; `extraction:*` grants all three. Tenant identity always
+comes from the verified machine key. Any nested `tenant` or `tenant_id` in a
+request is treated only as an equality assertion and is refused on mismatch.
+
+The parent ledger stores job and shard state, while candidate rows remain in
+verified Arrow artifacts. Review decisions are append-only Postgres rows; a
+newer decision for the same candidate digest supersedes an older decision.
+Rust reads those rows through the column-limited `theorem_spine` role and owns
+graph admission.
+
+The committed extraction fixture is a deterministic stub replay and is not a
+live GPU receipt. After deploying the dedicated extraction endpoint, run the
+hosted boundary oracle with a disposable machine key carrying
+`offload:invoke`, `extraction:submit`, and `extraction:read`:
+
+```bash
+THEOREM_EXTRACTION_LIVE_MACHINE_KEY=thk_... \
+python manage.py extraction_live_smoke \
+  --base-url https://travis-django-theorem-personal.fly.dev \
+  --timeout-seconds 900
+```
+
+Exit zero means the fixture input was uploaded through a presigned capability,
+the deployed extraction job succeeded, and every returned shard was downloaded
+and independently verified for digest, Arrow schema, and row count. It does
+not imply that the still-uncommitted Rust companion contract is byte-identical.
 
 ### Competence machine-key admission
 
@@ -395,6 +437,8 @@ Implemented operations:
 | Operation | Runtime | Input | Output |
 | --- | --- | --- | --- |
 | `data_science.community.assign` | RunPod Python | Arrow string `source`, `target` edges | Stable `node`, `community_id` connected components |
+| `data_science.extraction.atlas` | Dedicated RunPod extraction image | Arrow `passage_id`, `text`, nullable `metadata_json` | `theorem.extraction.v1` entity, event, relation, and concept candidates |
+| `data_science.extraction.typed` | Dedicated RunPod extraction image | Passage Arrow plus `params.object_type` | `theorem.extraction.v1` typed record candidates |
 | `data_science.r.survey_weight` | Fly R/rpy2 | Arrow numeric `value`, non-negative `weight` | One-row `weighted_mean`, `input_rows` table |
 
 The remaining TabFM, GNN, mixed-model, and survival operations return explicit

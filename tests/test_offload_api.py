@@ -277,6 +277,9 @@ def test_artifact_upload_capability_is_tenant_scoped(client, monkeypatch):
         "artifact_key": f"tenants/{client.tenant.id}/inputs/upload.arrow",
         "upload_url": "https://storage.example/upload",
         "expires_in_seconds": 300,
+        "required_headers": {
+            "Content-Type": "application/vnd.apache.arrow.stream",
+        },
     }
 
 
