@@ -62,6 +62,16 @@ GRANT SELECT (
   id, tenant_id, key_hash, scopes, revoked_at, expires_at
 ) ON control.control_apikey TO theorem_spine;
 
+GRANT SELECT (
+  id, tenant_id, operation, contract_version, source_kind, source_ref, params,
+  params_hash, status, shard_count, rows_total, created_at, updated_at
+) ON control.control_extractionjob TO theorem_spine;
+
+GRANT SELECT (
+  id, tenant_id, job_id, candidate_digest, claim_id, decision,
+  merge_target_claim_id, reason, reviewer, created_at
+) ON control.control_extractionreview TO theorem_spine;
+
 -- Explicitly no write on control for spine
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON ALL TABLES IN SCHEMA control FROM theorem_spine;
 

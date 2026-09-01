@@ -25,6 +25,10 @@ LAYOUT_COMPUTE_SCOPE = "layout:compute"
 LAYOUT_WILDCARD_SCOPE = "layout:*"
 RENDERING_RENDER_SCOPE = "rendering:render"
 RENDERING_WILDCARD_SCOPE = "rendering:*"
+EXTRACTION_SUBMIT_SCOPE = "extraction:submit"
+EXTRACTION_READ_SCOPE = "extraction:read"
+EXTRACTION_REVIEW_SCOPE = "extraction:review"
+EXTRACTION_WILDCARD_SCOPE = "extraction:*"
 
 
 @dataclass(frozen=True)

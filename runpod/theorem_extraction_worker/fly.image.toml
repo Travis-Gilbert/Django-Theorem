@@ -1,0 +1,6 @@
+# Image-only build. Run from the repository root so the Docker context contains
+# both the worker and the canonical extraction contract.
+app = "travis-theorem-extraction-worker"
+
+[build]
+  dockerfile = "runpod/theorem_extraction_worker/Dockerfile"

@@ -38,6 +38,7 @@ INSTALLED_APPS = [
     "apps.support",
     "apps.layout",
     "apps.rendering",
+    "apps.extraction",
 ]
 
 MIDDLEWARE = [
@@ -130,6 +131,8 @@ RUNPOD_POLL_INTERVAL_SECONDS = env.float("RUNPOD_POLL_INTERVAL_SECONDS", default
 # This is a provenance identifier, not a registry credential. It must be an
 # immutable image digest for the worker serving RUNPOD_SERVERLESS_ENDPOINT_ID.
 RUNPOD_WORKER_IMAGE_DIGEST = env("RUNPOD_WORKER_IMAGE_DIGEST", default="")
+RUNPOD_EXTRACTION_ENDPOINT_ID = env("RUNPOD_EXTRACTION_ENDPOINT_ID", default="")
+RUNPOD_EXTRACTION_IMAGE_DIGEST = env("RUNPOD_EXTRACTION_IMAGE_DIGEST", default="")
 OFFLOAD_EXECUTION_MODE = env("OFFLOAD_EXECUTION_MODE", default="stub").strip().lower()
 R_OFFLOAD_EXECUTION_MODE = (
     env("R_OFFLOAD_EXECUTION_MODE", default="stub").strip().lower()
@@ -145,9 +148,16 @@ ARTIFACT_S3_REGION = env("ARTIFACT_S3_REGION", default="")
 ARTIFACT_S3_BUCKET = env("ARTIFACT_S3_BUCKET", default="")
 ARTIFACT_PRESIGN_SECONDS = env.int("ARTIFACT_PRESIGN_SECONDS", default=900)
 ARTIFACT_MAX_BYTES = env.int("ARTIFACT_MAX_BYTES", default=64 * 1024 * 1024)
+EXTRACTION_MAX_INPUT_BYTES = env.int(
+    "EXTRACTION_MAX_INPUT_BYTES", default=ARTIFACT_MAX_BYTES // 4
+)
+EXTRACTION_SWEEP_INTERVAL_SECONDS = env.int(
+    "EXTRACTION_SWEEP_INTERVAL_SECONDS", default=300
+)
 
 THEOREM_API_BASE = env("THEOREM_API_BASE", default="http://127.0.0.1:8080")
 THEOREM_MACHINE_KEY = env("THEOREM_MACHINE_KEY", default="")
+THEOREM_MACHINE_KEY_PASSAGES = env("THEOREM_MACHINE_KEY_PASSAGES", default="")
 
 # Empty VALKEY_URL/REDIS_URL → tenant_cache uses in-memory dict (tests / no Redis).
 VALKEY_URL = env("VALKEY_URL", default=env("REDIS_URL", default=""))
@@ -197,7 +207,11 @@ CELERY_BEAT_SCHEDULE = {
     "competence-sleep-cycle": {
         "task": "apps.competence.tasks.sweep_competence_jobs",
         "schedule": COMPETENCE_SWEEP_INTERVAL_SECONDS,
-    }
+    },
+    "extraction-reconciliation": {
+        "task": "apps.extraction.tasks.sweep_extraction_jobs",
+        "schedule": EXTRACTION_SWEEP_INTERVAL_SECONDS,
+    },
 }
 # R queue note: workers consuming `offload.r` must pin R + renv; agent name is "R".
 CELERY_R_QUEUE = "offload.r"

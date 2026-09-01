@@ -1,0 +1,67 @@
+{% extends "admin/change_form.html" %}
+{% load i18n %}
+
+{% block after_related_objects %}
+  {{ block.super }}
+  <fieldset class="module aligned">
+    <h2>{% translate "Extracted candidates" %}</h2>
+    {% if candidate_error %}
+      <p class="errornote">{{ candidate_error }}</p>
+    {% elif candidate_page %}
+      <div class="results">
+        <table id="extraction-candidates">
+          <thead>
+            <tr>
+              <th>{% translate "Passage" %}</th>
+              <th>{% translate "Span" %}</th>
+              <th>{% translate "Subject" %}</th>
+              <th>{% translate "Predicate" %}</th>
+              <th>{% translate "Object" %}</th>
+              <th>{% translate "Stage" %}</th>
+              <th>{% translate "Confidence" %}</th>
+              <th>{% translate "Review" %}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for candidate in candidate_page %}
+              <tr>
+                <td>{{ candidate.passage_id }}</td>
+                <td>{{ candidate.span_start|default_if_none:"?" }}–{{ candidate.span_end|default_if_none:"?" }}</td>
+                <td>{{ candidate.subject }}</td>
+                <td>{{ candidate.predicate }}</td>
+                <td>{{ candidate.object }}</td>
+                <td>{{ candidate.stage }}</td>
+                <td>{{ candidate.confidence|default_if_none:"—" }}</td>
+                <td>
+                  <form method="post" action="{{ review_url }}">
+                    {% csrf_token %}
+                    <input type="hidden" name="candidate_digest" value="{{ candidate.candidate_digest }}">
+                    <select name="decision" required>
+                      {% for value, label in decision_choices %}
+                        <option value="{{ value }}">{{ label }}</option>
+                      {% endfor %}
+                    </select>
+                    <input name="merge_target_claim_id" placeholder="merge target claim id">
+                    <input name="reason" placeholder="reason">
+                    <button type="submit">{% translate "Record" %}</button>
+                  </form>
+                </td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="8">{% translate "No output candidates are available." %}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% if candidate_page.has_other_pages %}
+        <p class="paginator">
+          {% if candidate_page.has_previous %}<a href="?{% if candidate_query %}{{ candidate_query }}&amp;{% endif %}candidate_page={{ candidate_page.previous_page_number }}">{% translate "previous" %}</a>{% endif %}
+          {{ candidate_page.number }} / {{ candidate_page.paginator.num_pages }}
+          {% if candidate_page.has_next %}<a href="?{% if candidate_query %}{{ candidate_query }}&amp;{% endif %}candidate_page={{ candidate_page.next_page_number }}">{% translate "next" %}</a>{% endif %}
+        </p>
+      {% endif %}
+    {% else %}
+      <p>{% translate "Save the shard before reviewing candidates." %}</p>
+    {% endif %}
+  </fieldset>
+{% endblock %}

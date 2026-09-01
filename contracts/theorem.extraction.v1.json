@@ -1,0 +1,245 @@
+{
+  "contract": "theorem.extraction.v1",
+  "extractor_version": "theorem.extraction.v1",
+  "stages": [
+    "entity_relation",
+    "event_entity",
+    "event_relation",
+    "concept"
+  ],
+  "package": {
+    "atlas_rag": "0.0.5.post1",
+    "vllm": "0.28.0",
+    "pyarrow": "25.0.1",
+    "runpod": "1.12.0"
+  },
+  "atlas_schema": {
+    "entity_relation": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "Head": {
+            "type": "string",
+            "description": "The head entity in the relation, must be a non-empty string."
+          },
+          "Relation": {
+            "type": "string",
+            "description": "The relation between the head and tail entities, must be a non-empty string."
+          },
+          "Tail": {
+            "type": "string",
+            "description": "The tail entity in the relation, must be a non-empty string."
+          }
+        },
+        "required": [
+          "Head",
+          "Relation",
+          "Tail"
+        ],
+        "additionalProperties": false
+      },
+      "description": "An array of entity-relation triples, where each triple consists of a head entity, a relation, and a tail entity."
+    },
+    "event_entity": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "Event": {
+            "type": "string",
+            "description": "A simple sentence describing the event, must be a non-empty string."
+          },
+          "Entity": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": "An entity related to the event, must be a non-empty string."
+            },
+            "description": "An array of entities related to the event, must not be empty."
+          }
+        },
+        "required": [
+          "Event",
+          "Entity"
+        ],
+        "additionalProperties": false
+      },
+      "description": "An array of event-entity pairs, where each pair consists of an event and an array of entities related to that event."
+    },
+    "event_relation": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "Head": {
+            "type": "string",
+            "description": "A simple sentence describing the first event, must be a non-empty string."
+          },
+          "Relation": {
+            "type": "string",
+            "description": "The relation between the two events, must be a non-empty string."
+          },
+          "Tail": {
+            "type": "string",
+            "description": "A simple sentence describing the second event, must be a non-empty string."
+          }
+        },
+        "required": [
+          "Head",
+          "Relation",
+          "Tail"
+        ],
+        "additionalProperties": false
+      },
+      "description": "An array of event-relation triples, where each triple consists of a head event, a relation, and a tail event."
+    }
+  },
+  "prompts": {
+    "system": {
+      "text": "You are a helpful assistant who always response in a valid array of JSON objects without any explanation",
+      "sha256": "91817c3a4b036fdcae0c570edc998b38d405166ac3801555b2052240296b809e"
+    },
+    "entity_relation": {
+      "text": "Given a passage, summarize all the important entities and the relations between them in a concise manner. Relations should briefly capture the connections between entities, without repeating information from the head and tail entities. The entities should be as specific as possible. Exclude pronouns from being considered as entities. \n        You must **strictly output in the following JSON format**:\n\n        [\n            {\n                \"Head\": \"{a noun}\",\n                \"Relation\": \"{a verb}\",\n                \"Tail\": \"{a noun}\",\n            }...\n        ]\n        Here is the passage:",
+      "sha256": "a9684823fd875831c68a46c3755abbb421982221c59f094aa0ceb5bbcf57a06e"
+    },
+    "event_entity": {
+      "text": "Please analyze and summarize the participation relations between the events and entities in the given paragraph. Each event is a single independent sentence. Additionally, identify all the entities that participated in the events. Do not use ellipses. \n        You must **strictly output in the following JSON format**:\n\n        [\n            {\n                \"Event\": \"{a simple sentence describing an event}\",\n                \"Entity\": [\"entity 1\", \"entity 2\", \"...\"]\n            }...\n        ]\n        Here is the passage:",
+      "sha256": "efefe3b6aee57dd919f5397ddd28708349621033c4dc58a09d8ef4b53b1beb2e"
+    },
+    "event_relation": {
+      "text": "Please analyze and summarize the relationships between the events in the paragraph. Each event is a single independent sentence. Identify temporal and causal relationships between the events using the following types: before, after, at the same time, because, and as a result. Each extracted triple should be specific, meaningful, and able to stand alone.  Do not use ellipses.  \n        You must **strictly output in the following JSON format**:\n\n        [\n            {\n                \"Head\": \"{a simple sentence describing the event 1}\",\n                \"Relation\": \"{temporal or causality relation between the events}\",\n                \"Tail\": \"{a simple sentence describing the event 2}\"\n            }...\n        ]\n        Here is the passage:",
+      "sha256": "17a1ec9de4a45cf67d6fa2568ccaa1389d9ea132f4e060e7e14920d7753b5b82"
+    },
+    "concept": {
+      "text": "{\"entity\":\"I will give you an ENTITY. You need to give several phrases containing 1-2 words for the ABSTRACT ENTITY of this ENTITY.\\n            You must return your answer in the following format: phrases1, phrases2, phrases3,...\\n            You can't return anything other than answers.\\n            These abstract intention words should fulfill the following requirements.\\n            1. The ABSTRACT ENTITY phrases can well represent the ENTITY, and it could be the type of the ENTITY or the related concepts of the ENTITY.\\n            2. Strictly follow the provided format, do not add extra characters or words.\\n            3. Write at least 3 or more phrases at different abstract level if possible.\\n            4. Do not repeat the same word and the input in the answer.\\n            5. Stop immediately if you can't think of any more phrases, and no explanation is needed.\\n\\n            ENTITY: Soul\\n            CONTEXT: premiered BFI London Film Festival, became highest-grossing Pixar release\\n            Your answer: movie, film\\n\\n            ENTITY: Thinkpad X60\\n            CONTEXT: Richard Stallman announced he is using Trisquel on a Thinkpad X60\\n            Your answer: Thinkpad, laptop, machine, device, hardware, computer, brand\\n\\n            ENTITY: Harry Callahan\\n            CONTEXT: bluffs another robber, tortures Scorpio\\n            Your answer: person, Amarican, character, police officer, detective\\n\\n            ENTITY: Black Mountain College\\n            CONTEXT: was started by John Andrew Rice, attracted faculty\\n            Your answer: college, university, school, liberal arts college\\n\\n            EVENT: 1st April\\n            CONTEXT: Utkal Dibas celebrates\\n            Your answer: date, day, time, festival\\n\\n            ENTITY: [ENTITY]\\n            CONTEXT: [CONTEXT]\\n            Your answer:\",\"event\":\"I will give you an EVENT. You need to give several phrases containing 1-2 words for the ABSTRACT EVENT of this EVENT.\\n            You must return your answer in the following format: phrases1, phrases2, phrases3,...\\n            You can't return anything other than answers.\\n            These abstract event words should fulfill the following requirements.\\n            1. The ABSTRACT EVENT phrases can well represent the EVENT, and it could be the type of the EVENT or the related concepts of the EVENT.    \\n            2. Strictly follow the provided format, do not add extra characters or words.\\n            3. Write at least 3 or more phrases at different abstract level if possible.\\n            4. Do not repeat the same word and the input in the answer.\\n            5. Stop immediately if you can't think of any more phrases, and no explanation is needed.\\n\\n            EVENT: A man retreats to mountains and forests.\\n            Your answer: retreat, relaxation, escape, nature, solitude\\n            EVENT: A cat chased a prey into its shelter\\n            Your answer: hunting, escape, predation, hidding, stalking\\n            EVENT: Sam playing with his dog\\n            Your answer: relaxing event, petting, playing, bonding, friendship\\n            EVENT: [EVENT]\\n            Your answer:\",\"relation\":\"I will give you an RELATION. You need to give several phrases containing 1-2 words for the ABSTRACT RELATION of this RELATION.\\n            You must return your answer in the following format: phrases1, phrases2, phrases3,...\\n            You can't return anything other than answers.\\n            These abstract intention words should fulfill the following requirements.\\n            1. The ABSTRACT RELATION phrases can well represent the RELATION, and it could be the type of the RELATION or the simplest concepts of the RELATION.\\n            2. Strictly follow the provided format, do not add extra characters or words.\\n            3. Write at least 3 or more phrases at different abstract level if possible.\\n            4. Do not repeat the same word and the input in the answer.\\n            5. Stop immediately if you can't think of any more phrases, and no explanation is needed.\\n            \\n            RELATION: participated in\\n            Your answer: become part of, attend, take part in, engage in, involve in\\n            RELATION: be included in\\n            Your answer: join, be a part of, be a member of, be a component of\\n            RELATION: [RELATION]\\n            Your answer:\"}",
+      "sha256": "2ed0a8f09c0eea133319e15e2bca2e5a2ee3de919367eaf1ff067d08c269aebd",
+      "encoding": "canonical_json",
+      "variants": {
+        "event": "I will give you an EVENT. You need to give several phrases containing 1-2 words for the ABSTRACT EVENT of this EVENT.\n            You must return your answer in the following format: phrases1, phrases2, phrases3,...\n            You can't return anything other than answers.\n            These abstract event words should fulfill the following requirements.\n            1. The ABSTRACT EVENT phrases can well represent the EVENT, and it could be the type of the EVENT or the related concepts of the EVENT.    \n            2. Strictly follow the provided format, do not add extra characters or words.\n            3. Write at least 3 or more phrases at different abstract level if possible.\n            4. Do not repeat the same word and the input in the answer.\n            5. Stop immediately if you can't think of any more phrases, and no explanation is needed.\n\n            EVENT: A man retreats to mountains and forests.\n            Your answer: retreat, relaxation, escape, nature, solitude\n            EVENT: A cat chased a prey into its shelter\n            Your answer: hunting, escape, predation, hidding, stalking\n            EVENT: Sam playing with his dog\n            Your answer: relaxing event, petting, playing, bonding, friendship\n            EVENT: [EVENT]\n            Your answer:",
+        "entity": "I will give you an ENTITY. You need to give several phrases containing 1-2 words for the ABSTRACT ENTITY of this ENTITY.\n            You must return your answer in the following format: phrases1, phrases2, phrases3,...\n            You can't return anything other than answers.\n            These abstract intention words should fulfill the following requirements.\n            1. The ABSTRACT ENTITY phrases can well represent the ENTITY, and it could be the type of the ENTITY or the related concepts of the ENTITY.\n            2. Strictly follow the provided format, do not add extra characters or words.\n            3. Write at least 3 or more phrases at different abstract level if possible.\n            4. Do not repeat the same word and the input in the answer.\n            5. Stop immediately if you can't think of any more phrases, and no explanation is needed.\n\n            ENTITY: Soul\n            CONTEXT: premiered BFI London Film Festival, became highest-grossing Pixar release\n            Your answer: movie, film\n\n            ENTITY: Thinkpad X60\n            CONTEXT: Richard Stallman announced he is using Trisquel on a Thinkpad X60\n            Your answer: Thinkpad, laptop, machine, device, hardware, computer, brand\n\n            ENTITY: Harry Callahan\n            CONTEXT: bluffs another robber, tortures Scorpio\n            Your answer: person, Amarican, character, police officer, detective\n\n            ENTITY: Black Mountain College\n            CONTEXT: was started by John Andrew Rice, attracted faculty\n            Your answer: college, university, school, liberal arts college\n\n            EVENT: 1st April\n            CONTEXT: Utkal Dibas celebrates\n            Your answer: date, day, time, festival\n\n            ENTITY: [ENTITY]\n            CONTEXT: [CONTEXT]\n            Your answer:",
+        "relation": "I will give you an RELATION. You need to give several phrases containing 1-2 words for the ABSTRACT RELATION of this RELATION.\n            You must return your answer in the following format: phrases1, phrases2, phrases3,...\n            You can't return anything other than answers.\n            These abstract intention words should fulfill the following requirements.\n            1. The ABSTRACT RELATION phrases can well represent the RELATION, and it could be the type of the RELATION or the simplest concepts of the RELATION.\n            2. Strictly follow the provided format, do not add extra characters or words.\n            3. Write at least 3 or more phrases at different abstract level if possible.\n            4. Do not repeat the same word and the input in the answer.\n            5. Stop immediately if you can't think of any more phrases, and no explanation is needed.\n            \n            RELATION: participated in\n            Your answer: become part of, attend, take part in, engage in, involve in\n            RELATION: be included in\n            Your answer: join, be a part of, be a member of, be a component of\n            RELATION: [RELATION]\n            Your answer:"
+      }
+    }
+  },
+  "chunking": {
+    "chunk_size": 1024,
+    "chunk_overlap": 128,
+    "remove_doc_spaces": true
+  },
+  "model": {
+    "default_id": "google/gemma-4-12B-it",
+    "max_new_tokens": 2048,
+    "temperature": 0.0
+  },
+  "arrow_schema": {
+    "fields": [
+      {
+        "name": "tenant_id",
+        "type": "utf8",
+        "nullable": false
+      },
+      {
+        "name": "job_id",
+        "type": "utf8",
+        "nullable": false
+      },
+      {
+        "name": "shard",
+        "type": "int32",
+        "nullable": false
+      },
+      {
+        "name": "stage",
+        "type": "utf8",
+        "nullable": false
+      },
+      {
+        "name": "passage_id",
+        "type": "utf8",
+        "nullable": false
+      },
+      {
+        "name": "span_start",
+        "type": "int64",
+        "nullable": true
+      },
+      {
+        "name": "span_end",
+        "type": "int64",
+        "nullable": true
+      },
+      {
+        "name": "subject",
+        "type": "utf8",
+        "nullable": false
+      },
+      {
+        "name": "subject_kind",
+        "type": "utf8",
+        "nullable": false
+      },
+      {
+        "name": "predicate",
+        "type": "utf8",
+        "nullable": false
+      },
+      {
+        "name": "object",
+        "type": "utf8",
+        "nullable": false
+      },
+      {
+        "name": "object_kind",
+        "type": "utf8",
+        "nullable": false
+      },
+      {
+        "name": "object_type_id",
+        "type": "utf8",
+        "nullable": true
+      },
+      {
+        "name": "record_json",
+        "type": "utf8",
+        "nullable": true
+      },
+      {
+        "name": "confidence",
+        "type": "float32",
+        "nullable": true
+      },
+      {
+        "name": "model_id",
+        "type": "utf8",
+        "nullable": false
+      },
+      {
+        "name": "prompt_hash",
+        "type": "utf8",
+        "nullable": false
+      },
+      {
+        "name": "schema_hash",
+        "type": "utf8",
+        "nullable": false
+      },
+      {
+        "name": "extractor_version",
+        "type": "utf8",
+        "nullable": false
+      }
+    ]
+  },
+  "provenance_columns": [
+    "passage_id",
+    "span_start",
+    "span_end",
+    "model_id",
+    "prompt_hash",
+    "schema_hash",
+    "extractor_version"
+  ],
+  "schema_sha256": "e9dbf6db845b4be222073659f886b361d943478868cb854fbfbbe0367bd859f3"
+}
