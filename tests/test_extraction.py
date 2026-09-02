@@ -17,6 +17,7 @@ import pytest
 from django.contrib import admin
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
+from django.core.exceptions import ValidationError
 from django.test import Client, override_settings
 from django.urls import reverse
 from django.utils import timezone
@@ -1115,6 +1116,22 @@ def test_review_feed_preserves_legacy_digest_version(extraction_client):
     assert response.status_code == 200
     assert response.json()[0]["candidate_digest"] == review.candidate_digest
     assert response.json()[0]["candidate_digest_version"] == 1
+
+
+@pytest.mark.django_db
+def test_review_model_rejects_unsupported_digest_version(extraction_client):
+    review = ExtractionReview(
+        tenant=extraction_client.tenant,
+        candidate_digest="f" * 64,
+        candidate_digest_version=3,
+        decision=ExtractionReview.Decision.ACCEPT,
+        reviewer="user:fixture",
+    )
+
+    with pytest.raises(ValidationError) as exc_info:
+        review.full_clean()
+
+    assert "candidate_digest_version" in exc_info.value.message_dict
 
 
 @pytest.mark.django_db

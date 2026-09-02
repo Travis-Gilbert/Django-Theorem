@@ -105,13 +105,17 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name='extractionreview',
             name='candidate_digest_version',
-            field=models.PositiveSmallIntegerField(default=1),
+            field=models.PositiveSmallIntegerField(choices=[(1, 'Legacy v1'), (2, 'Current v2')], default=1),
             preserve_default=False,
         ),
         migrations.AlterField(
             model_name='extractionreview',
             name='candidate_digest_version',
-            field=models.PositiveSmallIntegerField(default=2),
+            field=models.PositiveSmallIntegerField(choices=[(1, 'Legacy v1'), (2, 'Current v2')], default=2),
+        ),
+        migrations.AddConstraint(
+            model_name='extractionreview',
+            constraint=models.CheckConstraint(condition=models.Q(('candidate_digest_version__in', (1, 2))), name='control_extract_review_digest_version_valid'),
         ),
         migrations.AddConstraint(
             model_name='extractionjob',

@@ -127,6 +127,10 @@ class ExtractionReview(models.Model):
         REJECT = "reject", "Reject"
         MERGE_INTO = "merge_into", "Merge into"
 
+    class CandidateDigestVersion(models.IntegerChoices):
+        LEGACY = 1, "Legacy v1"
+        CURRENT = 2, "Current v2"
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     tenant = models.ForeignKey(
         Tenant,
@@ -142,7 +146,10 @@ class ExtractionReview(models.Model):
         blank=True,
     )
     candidate_digest = models.CharField(max_length=71, db_index=True)
-    candidate_digest_version = models.PositiveSmallIntegerField(default=2)
+    candidate_digest_version = models.PositiveSmallIntegerField(
+        choices=CandidateDigestVersion.choices,
+        default=CandidateDigestVersion.CURRENT,
+    )
     claim_id = models.CharField(max_length=512, null=True, blank=True)
     decision = models.CharField(max_length=16, choices=Decision.choices)
     merge_target_claim_id = models.CharField(max_length=512, null=True, blank=True)
@@ -157,7 +164,11 @@ class ExtractionReview(models.Model):
             models.UniqueConstraint(
                 fields=["tenant", "candidate_digest", "created_at"],
                 name="control_extract_review_recency_uniq",
-            )
+            ),
+            models.CheckConstraint(
+                condition=models.Q(candidate_digest_version__in=(1, 2)),
+                name="control_extract_review_digest_version_valid",
+            ),
         ]
 
     def clean(self) -> None:
