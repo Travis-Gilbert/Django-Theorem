@@ -31,7 +31,11 @@ from apps.orchestration.tasks import cancel_job_task
 from apps.tenancy.models import Tenant
 
 from .models import ExtractionJob, ExtractionReview, ExtractionShard
-from .reviews import is_candidate_digest
+from .reviews import (
+    CANDIDATE_DIGEST_VERSION,
+    LEGACY_CANDIDATE_DIGEST_VERSION,
+    is_candidate_digest,
+)
 from .tasks import _contract, canonical_hash, submit_extraction
 
 
@@ -80,6 +84,7 @@ class ExtractionStatus(Schema):
 
 class ReviewItem(Schema):
     candidate_digest: str
+    candidate_digest_version: int = CANDIDATE_DIGEST_VERSION
     claim_id: str | None = None
     decision: str
     merge_target_claim_id: str | None = None
@@ -202,6 +207,11 @@ def review(request, body: list[ReviewItem]):
         for item in body:
             if not is_candidate_digest(item.candidate_digest):
                 raise HttpError(400, "candidate_digest must be sha256")
+            if item.candidate_digest_version not in {
+                LEGACY_CANDIDATE_DIGEST_VERSION,
+                CANDIDATE_DIGEST_VERSION,
+            }:
+                raise HttpError(400, "unsupported candidate_digest_version")
             if item.decision not in ExtractionReview.Decision.values:
                 raise HttpError(400, f"unsupported review decision: {item.decision}")
             job = None
@@ -215,6 +225,7 @@ def review(request, body: list[ReviewItem]):
                 tenant=principal.tenant,
                 job=job,
                 candidate_digest=item.candidate_digest.removeprefix("sha256:"),
+                candidate_digest_version=item.candidate_digest_version,
                 claim_id=item.claim_id,
                 decision=item.decision,
                 merge_target_claim_id=item.merge_target_claim_id,

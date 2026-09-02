@@ -253,11 +253,44 @@ def test_reverse_migration_preserves_source_kind_collisions():
 
     first.refresh_from_db()
     second.refresh_from_db()
-    for job in (first, second):
-        rollback = job.source_ref["__theorem_rollback__"]
-        assert rollback["job_id"] == str(job.id)
-        assert rollback["source_kind"] == job.source_kind
-        assert rollback["source_ref"] == {}
+    assert first.source_ref == second.source_ref == {}
+    assert first.params_hash == "3" * 64
+    assert second.params_hash != "3" * 64
+
+
+@pytest.mark.django_db
+def test_reverse_migration_uses_structural_json_numeric_equality():
+    tenant = Tenant.objects.create(
+        slug=f"rollback-json-{uuid.uuid4()}",
+        display_name="Rollback JSON",
+    )
+    first = ExtractionJob.objects.create(
+        tenant=tenant,
+        operation=ExtractionJob.Operation.ATLAS,
+        source_kind=ExtractionJob.SourceKind.WEB_CORPUS,
+        source_ref={"n": 1},
+        params_hash="0" * 64,
+    )
+    second = ExtractionJob.objects.create(
+        tenant=tenant,
+        operation=ExtractionJob.Operation.ATLAS,
+        source_kind=ExtractionJob.SourceKind.LIFE_EMAIL,
+        source_ref={"n": 1.0},
+        params_hash="0" * 64,
+    )
+    migration = importlib.import_module(
+        "apps.extraction.migrations."
+        "0002_remove_extractionjob_control_extract_job_idempotent_uniq_and_more"
+    )
+
+    migration.prepare_legacy_uniqueness(__import__("django").apps.apps, None)
+
+    first.refresh_from_db()
+    second.refresh_from_db()
+    assert first.source_ref == {"n": 1}
+    assert second.source_ref == {"n": 1.0}
+    assert first.params_hash == "0" * 64
+    assert second.params_hash != "0" * 64
 
 
 @pytest.mark.django_db
@@ -1054,6 +1087,27 @@ def test_review_api_reports_invalid_merge_as_bad_request(extraction_client):
 
     assert response.status_code == 400, response.content
     assert ExtractionReview.objects.count() == 0
+
+
+@pytest.mark.django_db
+def test_review_api_persists_explicit_legacy_digest_version(extraction_client):
+    response = extraction_client.post(
+        "/internal/extraction/review",
+        data=json.dumps(
+            [
+                {
+                    "candidate_digest": "c" * 64,
+                    "candidate_digest_version": LEGACY_CANDIDATE_DIGEST_VERSION,
+                    "decision": "accept",
+                }
+            ]
+        ),
+        content_type="application/json",
+    )
+
+    assert response.status_code == 200
+    review = ExtractionReview.objects.get()
+    assert review.candidate_digest_version == LEGACY_CANDIDATE_DIGEST_VERSION
 
 
 @pytest.mark.django_db
