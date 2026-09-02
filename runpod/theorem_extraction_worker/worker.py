@@ -593,15 +593,19 @@ def _typed_rows_from_records(
 def _typed_provenance_hashes(
     object_type: Mapping[str, Any],
 ) -> tuple[str, str]:
+    system = object_type.get("system")
+    schema = object_type.get("schema")
+    if not isinstance(system, str) or not system.strip():
+        raise ValueError("typed object_type.system must be a non-empty string")
+    if not isinstance(schema, Mapping):
+        raise ValueError("typed object_type.schema must be an object")
     schema_text = json.dumps(
-        object_type["schema"],
+        schema,
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
     )
-    prompt_hash = hashlib.sha256(
-        object_type["system"].encode("utf-8")
-    ).hexdigest()
+    prompt_hash = hashlib.sha256(system.encode("utf-8")).hexdigest()
     schema_hash = hashlib.sha256(
         schema_text.encode("utf-8")
     ).hexdigest()

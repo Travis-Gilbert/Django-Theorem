@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import importlib
 import json
 import uuid
 from datetime import timedelta
@@ -185,6 +186,72 @@ def test_submit_idempotency_distinguishes_source_kind(extraction_client):
     assert [response.status_code for response in responses] == [200, 200]
     assert responses[0].json()["job_id"] != responses[1].json()["job_id"]
     assert ExtractionJob.objects.count() == 2
+
+
+@pytest.mark.django_db
+@override_settings(CELERY_TASK_ALWAYS_EAGER=False)
+def test_typed_submit_rejects_malformed_object_type_before_job_creation(
+    extraction_client,
+):
+    response = extraction_client.post(
+        "/internal/extraction/submit",
+        data=json.dumps(
+            {
+                "operation": "typed",
+                "source_kind": "artifact",
+                "source_ref": {},
+                "params": {
+                    "object_type": {
+                        "object_type_id": "type:law-firm",
+                        "label_identifier_field": "name",
+                        "system": 42,
+                        "schema": {"type": "object"},
+                    }
+                },
+            }
+        ),
+        content_type="application/json",
+    )
+
+    assert response.status_code == 400
+    assert "system must be a non-empty string" in response.json()["detail"]
+    assert ExtractionJob.objects.count() == 0
+
+
+@pytest.mark.django_db
+def test_reverse_migration_preserves_source_kind_collisions():
+    tenant = Tenant.objects.create(
+        slug=f"rollback-{uuid.uuid4()}",
+        display_name="Rollback",
+    )
+    first = ExtractionJob.objects.create(
+        tenant=tenant,
+        operation=ExtractionJob.Operation.ATLAS,
+        source_kind=ExtractionJob.SourceKind.WEB_CORPUS,
+        source_ref={},
+        params_hash="3" * 64,
+    )
+    second = ExtractionJob.objects.create(
+        tenant=tenant,
+        operation=ExtractionJob.Operation.ATLAS,
+        source_kind=ExtractionJob.SourceKind.LIFE_EMAIL,
+        source_ref={},
+        params_hash="3" * 64,
+    )
+    migration = importlib.import_module(
+        "apps.extraction.migrations."
+        "0002_remove_extractionjob_control_extract_job_idempotent_uniq_and_more"
+    )
+
+    migration.prepare_legacy_uniqueness(__import__("django").apps.apps, None)
+
+    first.refresh_from_db()
+    second.refresh_from_db()
+    assert first.source_ref == {}
+    rollback = second.source_ref["__theorem_rollback__"]
+    assert rollback["job_id"] == str(second.id)
+    assert rollback["source_kind"] == ExtractionJob.SourceKind.LIFE_EMAIL
+    assert rollback["source_ref"] == {}
 
 
 @pytest.mark.django_db
@@ -508,7 +575,10 @@ def test_replan_refuses_tampered_input_artifact(artifact_store):
 
 
 @pytest.mark.django_db
-def test_cancel_during_planning_never_creates_or_dispatches_shards(monkeypatch):
+def test_cancel_during_planning_never_creates_or_dispatches_shards(
+    artifact_store,
+    monkeypatch,
+):
     tenant = Tenant.objects.create(
         slug=f"cancel-plan-{uuid.uuid4()}",
         display_name="Cancel during planning",
@@ -521,17 +591,23 @@ def test_cancel_during_planning_never_creates_or_dispatches_shards(monkeypatch):
     )
 
     def cancel_while_planning(*args, **kwargs):
+        table = _fixture_input_table().slice(0, 1)
+        stored = artifact_store.write_table(
+            tenant.id,
+            f"tenants/{tenant.id}/extraction/{job.id}/in/abandoned/0.arrow",
+            table,
+        )
         ExtractionJob.objects.filter(id=job.id).update(
             status=ExtractionJob.Status.CANCELED
         )
         return [
             ShardPlan(
                 index=0,
-                artifact_key=f"tenants/{tenant.id}/orphan.arrow",
-                payload_digest="sha256:" + "1" * 64,
-                schema_json="{}",
-                rows=1,
-                byte_length=1,
+                artifact_key=stored.artifact_key,
+                payload_digest=stored.payload_digest,
+                schema_json=stored.schema_json,
+                rows=stored.rows,
+                byte_length=len(encode_arrow_ipc(table)),
             )
         ]
 
@@ -549,6 +625,61 @@ def test_cancel_during_planning_never_creates_or_dispatches_shards(monkeypatch):
     assert job.status == ExtractionJob.Status.CANCELED
     assert job.shards.count() == 0
     assert dispatched == []
+    assert artifact_store.client.objects == {}
+
+
+@pytest.mark.django_db
+def test_successful_losing_planner_discards_its_attempt_artifacts(
+    artifact_store,
+    monkeypatch,
+):
+    tenant = Tenant.objects.create(
+        slug=f"planner-loser-{uuid.uuid4()}",
+        display_name="Planner loser",
+    )
+    job = ExtractionJob.objects.create(
+        tenant=tenant,
+        operation=ExtractionJob.Operation.ATLAS,
+        source_kind=ExtractionJob.SourceKind.WEB_CORPUS,
+        params_hash="2" * 64,
+    )
+
+    def finish_after_competitor(*args, **kwargs):
+        table = _fixture_input_table().slice(0, 1)
+        stored = artifact_store.write_table(
+            tenant.id,
+            f"tenants/{tenant.id}/extraction/{job.id}/in/loser/0.arrow",
+            table,
+        )
+        ExtractionShard.objects.create(
+            job=job,
+            index=0,
+            input_artifact_key=f"tenants/{tenant.id}/winner.arrow",
+            input_digest="sha256:" + "1" * 64,
+            input_schema_json="{}",
+            input_rows=1,
+        )
+        ExtractionJob.objects.filter(id=job.id).update(
+            status=ExtractionJob.Status.RUNNING,
+            shard_count=1,
+        )
+        return [
+            ShardPlan(
+                index=0,
+                artifact_key=stored.artifact_key,
+                payload_digest=stored.payload_digest,
+                schema_json=stored.schema_json,
+                rows=stored.rows,
+                byte_length=len(encode_arrow_ipc(table)),
+            )
+        ]
+
+    monkeypatch.setattr("apps.extraction.tasks.plan_shards", finish_after_competitor)
+
+    result = submit_extraction(str(job.id))
+
+    assert result == {"status": "running", "reused": True}
+    assert artifact_store.client.objects == {}
 
 
 @pytest.mark.django_db

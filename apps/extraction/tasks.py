@@ -24,7 +24,13 @@ from apps.orchestration.models import Job as OrchestrationJob
 from apps.orchestration.tasks import _fail_job, _post_provenance, dispatch_offload
 
 from .models import ExtractionJob, ExtractionShard
-from .planner import ExtractionPlanningError, ShardPlan, plan_shards, replan_shard
+from .planner import (
+    ExtractionPlanningError,
+    ShardPlan,
+    discard_plans,
+    plan_shards,
+    replan_shard,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -47,8 +53,14 @@ def canonical_hash(value: Any) -> str:
 
 
 def _typed_provenance_hashes(object_type: Mapping[str, Any]) -> tuple[str, str]:
-    prompt_hash = hashlib.sha256(object_type["system"].encode("utf-8")).hexdigest()
-    schema_hash = canonical_hash(object_type["schema"])
+    system = object_type.get("system")
+    schema = object_type.get("schema")
+    if not isinstance(system, str) or not system.strip():
+        raise ValueError("typed object_type.system must be a non-empty string")
+    if not isinstance(schema, Mapping):
+        raise ValueError("typed object_type.schema must be an object")
+    prompt_hash = hashlib.sha256(system.encode("utf-8")).hexdigest()
+    schema_hash = canonical_hash(schema)
     supplied_prompt_hash = object_type.get("prompt_hash")
     if supplied_prompt_hash is not None and supplied_prompt_hash != prompt_hash:
         raise ValueError("typed prompt_hash does not match object_type.system")
@@ -162,21 +174,27 @@ def submit_extraction(job_id: str) -> dict[str, Any]:
             locked.error = str(exc)
             locked.save(update_fields=["status", "error", "updated_at"])
         return {"status": "failed", "error": str(exc)}
+    abandoned_result = None
+    shards = []
     with transaction.atomic():
         locked = ExtractionJob.objects.select_for_update().get(id=job.id)
         if locked.status == ExtractionJob.Status.CANCELED:
-            return {"status": "canceled"}
-        if locked.shards.exists():
-            return {"status": locked.status, "reused": True}
-        shards = [_create_shard(locked, plan) for plan in plans]
-        locked.shard_count = len(shards)
-        locked.status = ExtractionJob.Status.RUNNING
-        locked.error = ""
-        locked.save(
-            update_fields=["shard_count", "status", "error", "updated_at"]
-        )
-        for shard in shards:
-            _create_orchestration_job(shard)
+            abandoned_result = {"status": "canceled"}
+        elif locked.shards.exists():
+            abandoned_result = {"status": locked.status, "reused": True}
+        else:
+            shards = [_create_shard(locked, plan) for plan in plans]
+            locked.shard_count = len(shards)
+            locked.status = ExtractionJob.Status.RUNNING
+            locked.error = ""
+            locked.save(
+                update_fields=["shard_count", "status", "error", "updated_at"]
+            )
+            for shard in shards:
+                _create_orchestration_job(shard)
+    if abandoned_result is not None:
+        discard_plans(job.tenant_id, plans)
+        return abandoned_result
     for shard in shards:
         _dispatch_shard(shard)
     return reconcile_extraction(str(job.id))

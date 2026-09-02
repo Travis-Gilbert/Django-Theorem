@@ -124,6 +124,21 @@ def _effective_params(body: SubmitRequest) -> dict[str, Any]:
     return params
 
 
+def _validate_typed_params(params: Mapping[str, Any]) -> None:
+    object_type = params.get("object_type")
+    if not isinstance(object_type, Mapping):
+        raise HttpError(400, "typed extraction requires params.object_type")
+    for name in ("object_type_id", "label_identifier_field", "system"):
+        value = object_type.get(name)
+        if not isinstance(value, str) or not value.strip():
+            raise HttpError(
+                400,
+                f"params.object_type.{name} must be a non-empty string",
+            )
+    if not isinstance(object_type.get("schema"), Mapping):
+        raise HttpError(400, "params.object_type.schema must be an object")
+
+
 @router.post("/submit", response=SubmitResponse)
 def submit(request, body: SubmitRequest):
     principal = require_machine_key(request, scope=EXTRACTION_SUBMIT_SCOPE)
@@ -134,10 +149,8 @@ def submit(request, body: SubmitRequest):
     _assert_tenant(body.source_ref, principal.tenant.id)
     _assert_tenant(body.params, principal.tenant.id)
     params = _effective_params(body)
-    if body.operation == ExtractionJob.Operation.TYPED and not isinstance(
-        params.get("object_type"), Mapping
-    ):
-        raise HttpError(400, "typed extraction requires params.object_type")
+    if body.operation == ExtractionJob.Operation.TYPED:
+        _validate_typed_params(params)
     source_ref = _canonical_object(body.source_ref)
     params_hash = canonical_hash(params)
     with transaction.atomic():

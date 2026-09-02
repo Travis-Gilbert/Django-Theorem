@@ -332,6 +332,25 @@ def _write_plan(
     )
 
 
+def discard_plans(
+    tenant: Tenant | UUID,
+    plans: list[ShardPlan],
+    *,
+    store: ArtifactStore | None = None,
+) -> None:
+    """Delete the explicit artifacts from one unadopted planning attempt."""
+    tenant_id = _tenant_id(tenant)
+    active_store = store or ArtifactStore.from_settings()
+    first_error = None
+    for plan in reversed(plans):
+        try:
+            active_store.delete_artifact(tenant_id, plan.artifact_key)
+        except ArtifactStorageError as exc:
+            first_error = first_error or exc
+    if first_error is not None:
+        raise ArtifactStorageError("artifact storage cleanup failed") from first_error
+
+
 def plan_shards(
     tenant: Tenant | UUID,
     source: Mapping[str, Any],
@@ -380,13 +399,9 @@ def plan_shards(
                 )
             )
     except Exception as planning_error:
-        cleanup_error = None
-        for plan in reversed(plans):
-            try:
-                active_store.delete_artifact(tenant_id, plan.artifact_key)
-            except ArtifactStorageError as exc:
-                cleanup_error = cleanup_error or exc
-        if cleanup_error is not None:
+        try:
+            discard_plans(tenant_id, plans, store=active_store)
+        except ArtifactStorageError:
             raise ArtifactStorageError(
                 "artifact storage cleanup failed after extraction planning"
             ) from planning_error
