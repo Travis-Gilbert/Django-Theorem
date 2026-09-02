@@ -257,14 +257,21 @@ def _base_row(
     predicate: str,
     object_value: str,
     object_kind: str,
-    chunk_offset: int = 0,
+    chunk_offset: int | None = 0,
     prompt_hash: str | None = None,
     schema_hash: str | None = None,
     object_type_id: str | None = None,
     record_json: str | None = None,
     confidence: float | None = None,
 ) -> dict[str, Any]:
-    span_start, span_end = _find_span(passage_text, subject, offset=chunk_offset)
+    if chunk_offset is None:
+        span_start, span_end = None, None
+    else:
+        span_start, span_end = _find_span(
+            passage_text,
+            subject,
+            offset=chunk_offset,
+        )
     return {
         "tenant_id": params["tenant_id"],
         "job_id": params["job_id"],
@@ -314,12 +321,12 @@ def _chunk_offset(
     passage_text: str,
     chunk_text: str,
     prior_offset: int | None,
-) -> int:
+) -> int | None:
     search_from = 0 if prior_offset is None else prior_offset + 1
     offset = passage_text.find(chunk_text, search_from)
     if offset < 0:
         offset = passage_text.find(chunk_text)
-    return max(offset, 0)
+    return offset if offset >= 0 else None
 
 
 def _atlas_json_rows(
@@ -346,7 +353,8 @@ def _atlas_json_rows(
                 chunk_text,
                 prior_offsets.get(passage_id),
             )
-            prior_offsets[passage_id] = offset
+            if offset is not None:
+                prior_offsets[passage_id] = offset
             for triple in value.get("entity_relation_dict") or []:
                 rows.append(
                     _base_row(
@@ -553,12 +561,18 @@ def _typed_rows_from_records(
     label_field = object_type["label_identifier_field"]
     object_type_id = object_type["object_type_id"]
     schema_text = json.dumps(object_type["schema"], sort_keys=True, separators=(",", ":"))
-    prompt_hash = object_type.get("prompt_hash") or hashlib.sha256(
+    prompt_hash = hashlib.sha256(
         object_type["system"].encode("utf-8")
     ).hexdigest()
-    schema_hash = object_type.get("schema_hash") or hashlib.sha256(
+    schema_hash = hashlib.sha256(
         schema_text.encode("utf-8")
     ).hexdigest()
+    supplied_prompt_hash = object_type.get("prompt_hash")
+    if supplied_prompt_hash is not None and supplied_prompt_hash != prompt_hash:
+        raise ValueError("typed prompt_hash does not match object_type.system")
+    supplied_schema_hash = object_type.get("schema_hash")
+    if supplied_schema_hash is not None and supplied_schema_hash != schema_hash:
+        raise ValueError("typed schema_hash does not match object_type.schema")
     rows = []
     for record in records:
         subject = record.get(label_field)

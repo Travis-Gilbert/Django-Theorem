@@ -49,6 +49,7 @@ class ExtractionJob(models.Model):
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.QUEUED)
     shard_count = models.PositiveIntegerField(default=0)
     rows_total = models.PositiveBigIntegerField(default=0)
+    error = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -57,7 +58,13 @@ class ExtractionJob(models.Model):
         ordering = ["-created_at"]
         constraints = [
             models.UniqueConstraint(
-                fields=["tenant", "operation", "params_hash", "source_ref"],
+                fields=[
+                    "tenant",
+                    "operation",
+                    "source_kind",
+                    "params_hash",
+                    "source_ref",
+                ],
                 name="control_extract_job_idempotent_uniq",
             )
         ]

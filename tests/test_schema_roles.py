@@ -95,6 +95,7 @@ def test_d3_columns_present():
             "status",
             "shard_count",
             "rows_total",
+            "error",
             "created_at",
             "updated_at",
         },
@@ -195,7 +196,8 @@ def test_theorem_spine_can_select_control_tenant():
         (
             "control_extractionjob",
             "id, tenant_id, operation, contract_version, source_kind, source_ref, "
-            "params, params_hash, status, shard_count, rows_total, created_at, updated_at",
+            "params, params_hash, status, shard_count, rows_total, error, "
+            "created_at, updated_at",
         ),
         (
             "control_extractionreview",

@@ -64,7 +64,7 @@ GRANT SELECT (
 
 GRANT SELECT (
   id, tenant_id, operation, contract_version, source_kind, source_ref, params,
-  params_hash, status, shard_count, rows_total, created_at, updated_at
+  params_hash, status, shard_count, rows_total, error, created_at, updated_at
 ) ON control.control_extractionjob TO theorem_spine;
 
 GRANT SELECT (

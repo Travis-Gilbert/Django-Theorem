@@ -74,6 +74,7 @@ class ExtractionStatus(Schema):
     status: str
     shard_count: int
     rows_total: int
+    error: str = ""
     shards: list[ShardStatus]
 
 
@@ -144,6 +145,7 @@ def submit(request, body: SubmitRequest):
         existing = ExtractionJob.objects.filter(
             tenant=principal.tenant,
             operation=body.operation,
+            source_kind=body.source_kind,
             params_hash=params_hash,
             source_ref=source_ref,
         ).first()
@@ -289,6 +291,7 @@ def status(request, job_id: UUID):
         status=job.status,
         shard_count=job.shard_count,
         rows_total=job.rows_total,
+        error=job.error,
         shards=shards,
     )
 

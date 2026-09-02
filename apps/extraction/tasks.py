@@ -14,7 +14,12 @@ from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
-from apps.orchestration.artifacts import ArtifactStore
+from apps.orchestration.artifacts import (
+    ArtifactConfigurationError,
+    ArtifactStorageError,
+    ArtifactStore,
+    ArtifactValidationError,
+)
 from apps.orchestration.models import Job as OrchestrationJob
 from apps.orchestration.tasks import _post_provenance, dispatch_offload
 
@@ -39,6 +44,18 @@ def canonical_hash(value: Any) -> str:
         separators=(",", ":"),
     ).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
+
+
+def _typed_provenance_hashes(object_type: Mapping[str, Any]) -> tuple[str, str]:
+    prompt_hash = hashlib.sha256(object_type["system"].encode("utf-8")).hexdigest()
+    schema_hash = canonical_hash(object_type["schema"])
+    supplied_prompt_hash = object_type.get("prompt_hash")
+    if supplied_prompt_hash is not None and supplied_prompt_hash != prompt_hash:
+        raise ValueError("typed prompt_hash does not match object_type.system")
+    supplied_schema_hash = object_type.get("schema_hash")
+    if supplied_schema_hash is not None and supplied_schema_hash != schema_hash:
+        raise ValueError("typed schema_hash does not match object_type.schema")
+    return prompt_hash, schema_hash
 
 
 def operation_id(job_id: str, index: int, input_digest: str) -> str:
@@ -123,19 +140,39 @@ def submit_extraction(job_id: str) -> dict[str, Any]:
         "source_kind": job.source_kind,
         "source_ref": job.source_ref,
     }
-    plans = plan_shards(
-        job.tenant,
-        source,
-        settings.EXTRACTION_MAX_INPUT_BYTES,
-    )
+    try:
+        plans = plan_shards(
+            job.tenant,
+            source,
+            settings.EXTRACTION_MAX_INPUT_BYTES,
+        )
+    except (
+        ArtifactConfigurationError,
+        ArtifactStorageError,
+        ArtifactValidationError,
+        ExtractionPlanningError,
+    ) as exc:
+        with transaction.atomic():
+            locked = ExtractionJob.objects.select_for_update().get(id=job.id)
+            if locked.status == ExtractionJob.Status.CANCELED:
+                return {"status": "canceled"}
+            locked.status = ExtractionJob.Status.FAILED
+            locked.error = str(exc)
+            locked.save(update_fields=["status", "error", "updated_at"])
+        return {"status": "failed", "error": str(exc)}
     with transaction.atomic():
         locked = ExtractionJob.objects.select_for_update().get(id=job.id)
+        if locked.status == ExtractionJob.Status.CANCELED:
+            return {"status": "canceled"}
         if locked.shards.exists():
             return {"status": locked.status, "reused": True}
         shards = [_create_shard(locked, plan) for plan in plans]
         locked.shard_count = len(shards)
         locked.status = ExtractionJob.Status.RUNNING
-        locked.save(update_fields=["shard_count", "status", "updated_at"])
+        locked.error = ""
+        locked.save(
+            update_fields=["shard_count", "status", "error", "updated_at"]
+        )
         for shard in shards:
             _create_orchestration_job(shard)
     for shard in shards:
@@ -178,12 +215,7 @@ def _stub_rows(
     else:
         object_type = params["object_type"]
         label_field = object_type["label_identifier_field"]
-        prompt_hash = object_type.get("prompt_hash") or hashlib.sha256(
-            object_type["system"].encode("utf-8")
-        ).hexdigest()
-        schema_hash = object_type.get("schema_hash") or canonical_hash(
-            object_type["schema"]
-        )
+        prompt_hash, schema_hash = _typed_provenance_hashes(object_type)
         records_by_passage = fixture["stub_responses"]["typed_records_by_passage"]
         text_by_passage = {
             row["passage_id"]: row["text"] for row in input_table.to_pylist()
@@ -325,10 +357,10 @@ def reconcile_extraction(job_id: str) -> dict[str, Any]:
             shard.status == ExtractionShard.Status.FAILED
             and "output_exceeds_max_bytes" in (shard.error or "")
         ):
-            store = store or ArtifactStore.from_settings()
             try:
+                store = store or ArtifactStore.from_settings()
                 replacements = replan_shard(shard, store=store)
-            except ExtractionPlanningError as exc:
+            except (ArtifactValidationError, ExtractionPlanningError) as exc:
                 shard.error = f"{shard.error}; replan refused: {exc}"
                 shard.save(update_fields=["error", "updated_at"])
                 orchestration_job = shard.orchestration_job

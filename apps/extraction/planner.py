@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
@@ -24,6 +24,9 @@ from .models import ExtractionJob, ExtractionShard
 
 class ExtractionPlanningError(ValueError):
     """The extraction source cannot be planned without violating the contract."""
+
+
+REMOTE_PAGE_SIZE = 1_000
 
 
 @dataclass(frozen=True)
@@ -52,20 +55,22 @@ def _tenant_id(tenant: Tenant | UUID) -> UUID:
 
 def _validate_passage_table(table: pa.Table) -> pa.Table:
     expected = passage_schema()
-    if table.schema.equals(expected, check_metadata=False):
-        return table
-    missing = set(expected.names) - set(table.column_names)
-    if missing:
-        raise ExtractionPlanningError(
-            f"passage source omitted columns: {', '.join(sorted(missing))}"
-        )
-    try:
-        normalized = pa.table(
-            [table[name].combine_chunks() for name in expected.names],
-            schema=expected,
-        )
-    except (pa.ArrowException, ValueError, TypeError) as exc:
-        raise ExtractionPlanningError("passage source does not match the Arrow schema") from exc
+    normalized = table
+    if not table.schema.equals(expected, check_metadata=False):
+        missing = set(expected.names) - set(table.column_names)
+        if missing:
+            raise ExtractionPlanningError(
+                f"passage source omitted columns: {', '.join(sorted(missing))}"
+            )
+        try:
+            normalized = pa.table(
+                [table[name].combine_chunks() for name in expected.names],
+                schema=expected,
+            )
+        except (pa.ArrowException, ValueError, TypeError) as exc:
+            raise ExtractionPlanningError(
+                "passage source does not match the Arrow schema"
+            ) from exc
     if any(value is None for value in normalized["passage_id"].to_pylist()):
         raise ExtractionPlanningError("passage_id cannot contain nulls")
     if any(value is None for value in normalized["text"].to_pylist()):
@@ -92,12 +97,13 @@ def _artifact_source(
     )
 
 
-def _remote_source(
+def _remote_source_pages(
     tenant_id: UUID,
     source_kind: str,
     *,
     client: httpx.Client | None,
-) -> pa.Table:
+    max_response_bytes: int,
+) -> Iterator[pa.Table]:
     if not settings.THEOREM_MACHINE_KEY_PASSAGES:
         raise ExtractionPlanningError("THEOREM_MACHINE_KEY_PASSAGES is required")
     owned_client = client is None
@@ -105,69 +111,125 @@ def _remote_source(
         base_url=settings.THEOREM_API_BASE.rstrip("/"),
         timeout=30.0,
     )
+    cursor: str | None = None
+    seen_cursors: set[str] = set()
     try:
-        response = active_client.get(
-            "/internal/passages",
-            params={"tenant": str(tenant_id), "source": source_kind},
-            headers={
-                "Authorization": f"Bearer {settings.THEOREM_MACHINE_KEY_PASSAGES}"
-            },
-        )
-        response.raise_for_status()
-        payload = response.json()
-    except (httpx.HTTPError, ValueError) as exc:
-        raise ExtractionPlanningError("passage listing request failed") from exc
+        while True:
+            query = {
+                "tenant": str(tenant_id),
+                "source": source_kind,
+                "limit": REMOTE_PAGE_SIZE,
+            }
+            if cursor is not None:
+                query["cursor"] = cursor
+            try:
+                with active_client.stream(
+                    "GET",
+                    "/internal/passages",
+                    params=query,
+                    headers={
+                        "Authorization": (
+                            f"Bearer {settings.THEOREM_MACHINE_KEY_PASSAGES}"
+                        )
+                    },
+                ) as response:
+                    response.raise_for_status()
+                    encoded = bytearray()
+                    for chunk in response.iter_bytes(chunk_size=64 * 1024):
+                        if len(encoded) + len(chunk) > max_response_bytes:
+                            raise ExtractionPlanningError(
+                                "passage listing page exceeds the response byte limit"
+                            )
+                        encoded.extend(chunk)
+                payload = json.loads(encoded)
+            except (httpx.HTTPError, json.JSONDecodeError) as exc:
+                raise ExtractionPlanningError("passage listing request failed") from exc
+
+            raw_passages = (
+                payload.get("passages") if isinstance(payload, Mapping) else payload
+            )
+            if not isinstance(raw_passages, list):
+                raise ExtractionPlanningError("passage listing must return a list")
+            passages = []
+            for item in raw_passages:
+                if not isinstance(item, Mapping):
+                    raise ExtractionPlanningError(
+                        "passage listing rows must be objects"
+                    )
+                asserted_tenant = item.get("tenant_id")
+                if asserted_tenant is not None and str(asserted_tenant) != str(
+                    tenant_id
+                ):
+                    raise ExtractionPlanningError(
+                        "passage listing crossed the admitted tenant"
+                    )
+                passage_id = item.get("passage_id") or item.get("id")
+                text = item.get("text")
+                if not isinstance(passage_id, str) or not isinstance(text, str):
+                    raise ExtractionPlanningError(
+                        "passage rows require passage_id and text"
+                    )
+                metadata_json = item.get("metadata_json")
+                if metadata_json is None and item.get("metadata") is not None:
+                    metadata_json = json.dumps(
+                        item["metadata"],
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                if metadata_json is not None and not isinstance(metadata_json, str):
+                    raise ExtractionPlanningError(
+                        "metadata_json must be a string or null"
+                    )
+                passages.append(
+                    {
+                        "passage_id": passage_id,
+                        "text": text,
+                        "metadata_json": metadata_json,
+                    }
+                )
+            yield pa.Table.from_pylist(passages, schema=passage_schema())
+
+            next_cursor = (
+                payload.get("next_cursor") if isinstance(payload, Mapping) else None
+            )
+            if next_cursor is None:
+                break
+            if not isinstance(next_cursor, str) or not next_cursor:
+                raise ExtractionPlanningError(
+                    "passage listing next_cursor must be a non-empty string"
+                )
+            if next_cursor in seen_cursors:
+                raise ExtractionPlanningError("passage listing repeated a cursor")
+            seen_cursors.add(next_cursor)
+            cursor = next_cursor
     finally:
         if owned_client:
             active_client.close()
-    raw_passages = payload.get("passages") if isinstance(payload, Mapping) else payload
-    if not isinstance(raw_passages, list):
-        raise ExtractionPlanningError("passage listing must return a list")
-    passages = []
-    for item in raw_passages:
-        if not isinstance(item, Mapping):
-            raise ExtractionPlanningError("passage listing rows must be objects")
-        asserted_tenant = item.get("tenant_id")
-        if asserted_tenant is not None and str(asserted_tenant) != str(tenant_id):
-            raise ExtractionPlanningError("passage listing crossed the admitted tenant")
-        passage_id = item.get("passage_id") or item.get("id")
-        text = item.get("text")
-        if not isinstance(passage_id, str) or not isinstance(text, str):
-            raise ExtractionPlanningError("passage rows require passage_id and text")
-        metadata_json = item.get("metadata_json")
-        if metadata_json is None and item.get("metadata") is not None:
-            metadata_json = json.dumps(
-                item["metadata"],
-                sort_keys=True,
-                separators=(",", ":"),
-            )
-        if metadata_json is not None and not isinstance(metadata_json, str):
-            raise ExtractionPlanningError("metadata_json must be a string or null")
-        passages.append(
-            {
-                "passage_id": passage_id,
-                "text": text,
-                "metadata_json": metadata_json,
-            }
-        )
-    return pa.Table.from_pylist(passages, schema=passage_schema())
 
 
-def _source_table(
+def _source_tables(
     tenant_id: UUID,
     source: Mapping[str, Any],
     *,
     store: ArtifactStore,
     http_client: httpx.Client | None,
-) -> pa.Table:
+    max_response_bytes: int,
+) -> Iterator[pa.Table]:
     source_kind = source.get("source_kind")
     source_ref = source.get("source_ref") or {}
     if not isinstance(source_ref, Mapping):
         raise ExtractionPlanningError("source_ref must be an object")
     if source_kind == "artifact":
-        return _artifact_source(tenant_id, source_ref, store)
+        yield _artifact_source(tenant_id, source_ref, store)
+        return
     if source_kind in {"web_corpus", "life_email"}:
-        return _remote_source(tenant_id, str(source_kind), client=http_client)
+        yield from _remote_source_pages(
+            tenant_id,
+            str(source_kind),
+            client=http_client,
+            max_response_bytes=max_response_bytes,
+        )
+        return
     raise ExtractionPlanningError(f"unsupported extraction source: {source_kind}")
 
 
@@ -175,7 +237,7 @@ def _split_table(table: pa.Table, max_input_bytes: int) -> list[pa.Table]:
     if max_input_bytes <= 0:
         raise ExtractionPlanningError("max_input_bytes must be positive")
     if table.num_rows == 0:
-        return [table]
+        return []
     shards: list[pa.Table] = []
     start = 0
     while start < table.num_rows:
@@ -251,22 +313,35 @@ def plan_shards(
     except (KeyError, TypeError, ValueError) as exc:
         raise ExtractionPlanningError("source requires a UUID job_id") from exc
     active_store = store or ArtifactStore.from_settings()
-    table = _source_table(
+    plans: list[ShardPlan] = []
+    for table in _source_tables(
         tenant_id,
         source,
         store=active_store,
         http_client=http_client,
-    )
-    return [
-        _write_plan(
-            store=active_store,
-            tenant_id=tenant_id,
-            job_id=job_id,
-            index=index,
-            table=shard_table,
+        max_response_bytes=max(max_input_bytes * 2, 64 * 1024),
+    ):
+        for shard_table in _split_table(table, max_input_bytes):
+            plans.append(
+                _write_plan(
+                    store=active_store,
+                    tenant_id=tenant_id,
+                    job_id=job_id,
+                    index=len(plans),
+                    table=shard_table,
+                )
+            )
+    if not plans:
+        plans.append(
+            _write_plan(
+                store=active_store,
+                tenant_id=tenant_id,
+                job_id=job_id,
+                index=0,
+                table=pa.Table.from_pylist([], schema=passage_schema()),
+            )
         )
-        for index, shard_table in enumerate(_split_table(table, max_input_bytes))
-    ]
+    return plans
 
 
 def replan_shard(
@@ -276,7 +351,13 @@ def replan_shard(
 ) -> list[ExtractionShard]:
     """Split one refused shard into two replacements and supersede the original."""
     active_store = store or ArtifactStore.from_settings()
-    table = active_store.read_table(shard.job.tenant_id, shard.input_artifact_key)
+    table = active_store.read_table(
+        shard.job.tenant_id,
+        shard.input_artifact_key,
+        expected_digest=shard.input_digest,
+        expected_schema_json=shard.input_schema_json,
+        expected_rows=shard.input_rows,
+    )
     if table.num_rows < 2:
         raise ExtractionPlanningError("a one-row shard cannot be split further")
     split_at = table.num_rows // 2

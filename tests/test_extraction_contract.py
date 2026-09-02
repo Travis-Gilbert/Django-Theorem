@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import base64
+import copy
 import hashlib
 import importlib.util
 import json
 from pathlib import Path
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -149,6 +152,43 @@ def test_typed_fixture_record_conforms_to_declared_shape():
     assert row["object_type_id"] == fixture["typed_params"]["object_type"][
         "object_type_id"
     ]
+
+
+def test_typed_worker_derives_and_verifies_prompt_and_schema_hashes():
+    worker = _worker()
+    fixture = json.loads(FIXTURE_PATH.read_text())
+    params = copy.deepcopy(fixture["typed_params"])
+    expected = fixture["expected"]["typed_rows"][0]
+    record = json.loads(expected["record_json"])
+    passage = {
+        "passage_id": expected["passage_id"],
+        "text": "Fett Law declined representation.",
+    }
+
+    rows = worker._typed_rows_from_records(
+        passage=passage,
+        records=[record],
+        params=params,
+        contract=json.loads(CONTRACT_PATH.read_text()),
+    )
+
+    assert rows[0]["prompt_hash"] == params["object_type"]["prompt_hash"]
+    assert rows[0]["schema_hash"] == params["object_type"]["schema_hash"]
+
+    params["object_type"]["prompt_hash"] = "0" * 64
+    with pytest.raises(ValueError, match="prompt_hash"):
+        worker._typed_rows_from_records(
+            passage=passage,
+            records=[record],
+            params=params,
+            contract=json.loads(CONTRACT_PATH.read_text()),
+        )
+
+
+def test_unmatched_atlas_chunk_does_not_invent_zero_offset():
+    worker = _worker()
+
+    assert worker._chunk_offset("original passage", "model-rewritten chunk", None) is None
 
 
 def test_oversize_output_refuses_before_upload():

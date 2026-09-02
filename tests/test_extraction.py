@@ -10,28 +10,44 @@ from datetime import timedelta
 from io import BytesIO
 from pathlib import Path
 
+import httpx
 import pyarrow as pa
 import pytest
+from django.contrib import admin
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.test import Client, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
+from apps.extraction.admin import ExtractionReviewAdmin
 from apps.extraction.models import (
     ExtractionJob,
     ExtractionReview,
     ExtractionShard,
     latest_reviews_since,
 )
-from apps.extraction.planner import passage_schema, plan_shards, replan_shard
-from apps.extraction.tasks import reconcile_extraction
+from apps.extraction.planner import (
+    ExtractionPlanningError,
+    ShardPlan,
+    _validate_passage_table,
+    passage_schema,
+    plan_shards,
+    replan_shard,
+)
+from apps.extraction.tasks import (
+    _typed_provenance_hashes,
+    reconcile_extraction,
+    submit_extraction,
+)
 from apps.extraction.reviews import candidate_digest
 from apps.keys.mint import mint_api_key
 from apps.orchestration.artifacts import (
     ARROW_IPC_CONTENT_TYPE,
     ArtifactStore,
+    ArtifactValidationError,
     decode_arrow_ipc,
+    encode_arrow_ipc,
 )
 from apps.orchestration.models import Job as OrchestrationJob
 from apps.tenancy.models import Tenant
@@ -140,6 +156,33 @@ def test_duplicate_submit_reuses_job(extraction_client, artifact_store):
 
 
 @pytest.mark.django_db
+@override_settings(CELERY_TASK_ALWAYS_EAGER=False)
+def test_submit_idempotency_distinguishes_source_kind(extraction_client):
+    bodies = [
+        {
+            "operation": "atlas",
+            "source_kind": source_kind,
+            "source_ref": {},
+            "params": {},
+        }
+        for source_kind in ("web_corpus", "life_email")
+    ]
+
+    responses = [
+        extraction_client.post(
+            "/internal/extraction/submit",
+            data=json.dumps(body),
+            content_type="application/json",
+        )
+        for body in bodies
+    ]
+
+    assert [response.status_code for response in responses] == [200, 200]
+    assert responses[0].json()["job_id"] != responses[1].json()["job_id"]
+    assert ExtractionJob.objects.count() == 2
+
+
+@pytest.mark.django_db
 def test_latest_review_supersedes_by_recency(extraction_client):
     tenant = extraction_client.tenant
     digest = "a" * 64
@@ -204,6 +247,99 @@ def test_five_megabyte_source_plans_five_one_megabyte_shards(artifact_store):
     assert all(plan.byte_length <= 1024 * 1024 for plan in plans)
 
 
+def test_exact_passage_schema_still_rejects_null_required_values():
+    table = pa.Table.from_arrays(
+        [
+            pa.array([None], type=pa.string()),
+            pa.array(["body"], type=pa.string()),
+            pa.array([None], type=pa.string()),
+        ],
+        schema=passage_schema(),
+    )
+
+    with pytest.raises(ExtractionPlanningError, match="passage_id cannot contain nulls"):
+        _validate_passage_table(table)
+
+
+@pytest.mark.django_db
+@override_settings(THEOREM_MACHINE_KEY_PASSAGES="passages-key")
+def test_remote_source_is_planned_page_by_page(artifact_store):
+    tenant_id = uuid.uuid4()
+    cursors = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        cursors.append(request.url.params.get("cursor"))
+        assert request.url.params["limit"] == "1000"
+        assert request.headers["Authorization"] == "Bearer passages-key"
+        if request.url.params.get("cursor") is None:
+            return httpx.Response(
+                200,
+                json={
+                    "passages": [
+                        {"passage_id": "p1", "text": "one"},
+                        {"passage_id": "p2", "text": "two"},
+                    ],
+                    "next_cursor": "page-2",
+                },
+            )
+        return httpx.Response(
+            200,
+            json={"passages": [{"passage_id": "p3", "text": "three"}]},
+        )
+
+    with httpx.Client(
+        base_url="https://theorem.example",
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        plans = plan_shards(
+            tenant_id,
+            {
+                "job_id": str(uuid.uuid4()),
+                "source_kind": "web_corpus",
+                "source_ref": {},
+            },
+            64 * 1024,
+            store=artifact_store,
+            http_client=client,
+        )
+
+    assert cursors == [None, "page-2"]
+    assert [plan.rows for plan in plans] == [2, 1]
+
+
+@pytest.mark.django_db
+@override_settings(THEOREM_MACHINE_KEY_PASSAGES="passages-key")
+def test_remote_source_refuses_an_oversized_page(artifact_store):
+    client = httpx.Client(
+        base_url="https://theorem.example",
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200,
+                json={
+                    "passages": [
+                        {"passage_id": "too-large", "text": "x" * 70_000}
+                    ]
+                },
+            )
+        ),
+    )
+    try:
+        with pytest.raises(ExtractionPlanningError, match="response byte limit"):
+            plan_shards(
+                uuid.uuid4(),
+                {
+                    "job_id": str(uuid.uuid4()),
+                    "source_kind": "life_email",
+                    "source_ref": {},
+                },
+                512,
+                store=artifact_store,
+                http_client=client,
+            )
+    finally:
+        client.close()
+
+
 @pytest.mark.django_db
 def test_refused_shard_replans_into_two_and_is_superseded(artifact_store):
     tenant = Tenant.objects.create(slug=f"replan-{uuid.uuid4()}", display_name="Replan")
@@ -234,6 +370,108 @@ def test_refused_shard_replans_into_two_and_is_superseded(artifact_store):
     assert [replacement.input_rows for replacement in replacements] == [1, 2]
     assert [replacement.index for replacement in replacements] == [1, 2]
     assert replan_shard(shard, store=artifact_store) == []
+
+
+@pytest.mark.django_db
+def test_replan_refuses_tampered_input_artifact(artifact_store):
+    tenant = Tenant.objects.create(
+        slug=f"replan-tamper-{uuid.uuid4()}",
+        display_name="Replan tamper",
+    )
+    job = ExtractionJob.objects.create(
+        tenant=tenant,
+        operation=ExtractionJob.Operation.ATLAS,
+        source_kind=ExtractionJob.SourceKind.ARTIFACT,
+        params_hash="9" * 64,
+    )
+    table = _fixture_input_table()
+    key = f"tenants/{tenant.id}/extraction/{job.id}/in/0.arrow"
+    stored = artifact_store.write_table(tenant.id, key, table)
+    shard = ExtractionShard.objects.create(
+        job=job,
+        index=0,
+        input_artifact_key=stored.artifact_key,
+        input_digest=stored.payload_digest,
+        input_schema_json=stored.schema_json,
+        input_rows=stored.rows,
+        status=ExtractionShard.Status.FAILED,
+    )
+    artifact_store.client.objects[
+        (artifact_store.bucket, stored.artifact_key)
+    ] = encode_arrow_ipc(table.slice(0, 1))
+
+    with pytest.raises(ArtifactValidationError, match="digest"):
+        replan_shard(shard, store=artifact_store)
+
+
+@pytest.mark.django_db
+def test_cancel_during_planning_never_creates_or_dispatches_shards(monkeypatch):
+    tenant = Tenant.objects.create(
+        slug=f"cancel-plan-{uuid.uuid4()}",
+        display_name="Cancel during planning",
+    )
+    job = ExtractionJob.objects.create(
+        tenant=tenant,
+        operation=ExtractionJob.Operation.ATLAS,
+        source_kind=ExtractionJob.SourceKind.WEB_CORPUS,
+        params_hash="8" * 64,
+    )
+
+    def cancel_while_planning(*args, **kwargs):
+        ExtractionJob.objects.filter(id=job.id).update(
+            status=ExtractionJob.Status.CANCELED
+        )
+        return [
+            ShardPlan(
+                index=0,
+                artifact_key=f"tenants/{tenant.id}/orphan.arrow",
+                payload_digest="sha256:" + "1" * 64,
+                schema_json="{}",
+                rows=1,
+                byte_length=1,
+            )
+        ]
+
+    dispatched = []
+    monkeypatch.setattr("apps.extraction.tasks.plan_shards", cancel_while_planning)
+    monkeypatch.setattr(
+        "apps.extraction.tasks._dispatch_shard",
+        lambda shard: dispatched.append(shard.id),
+    )
+
+    result = submit_extraction(str(job.id))
+
+    job.refresh_from_db()
+    assert result == {"status": "canceled"}
+    assert job.status == ExtractionJob.Status.CANCELED
+    assert job.shards.count() == 0
+    assert dispatched == []
+
+
+@pytest.mark.django_db
+def test_planning_failure_is_persisted_and_exposed(extraction_client, monkeypatch):
+    job = ExtractionJob.objects.create(
+        tenant=extraction_client.tenant,
+        operation=ExtractionJob.Operation.ATLAS,
+        source_kind=ExtractionJob.SourceKind.WEB_CORPUS,
+        params_hash="7" * 64,
+    )
+    monkeypatch.setattr(
+        "apps.extraction.tasks.plan_shards",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            ExtractionPlanningError("fixture planning refused")
+        ),
+    )
+
+    result = submit_extraction(str(job.id))
+
+    job.refresh_from_db()
+    response = extraction_client.get(f"/internal/extraction/{job.id}")
+    assert result == {"status": "failed", "error": "fixture planning refused"}
+    assert job.status == ExtractionJob.Status.FAILED
+    assert job.error == "fixture planning refused"
+    assert response.status_code == 200
+    assert response.json()["error"] == "fixture planning refused"
 
 
 @pytest.mark.django_db
@@ -496,6 +734,64 @@ def test_admin_review_from_verified_shard_candidate(artifact_store):
     assert review.job == job
     assert review.candidate_digest == digest
     assert review.decision == ExtractionReview.Decision.REJECT
+
+
+@pytest.mark.django_db
+def test_extraction_review_admin_keeps_existing_ledger_rows_immutable():
+    tenant = Tenant.objects.create(
+        slug=f"immutable-review-{uuid.uuid4()}",
+        display_name="Immutable review",
+    )
+    review = ExtractionReview.objects.create(
+        tenant=tenant,
+        candidate_digest="6" * 64,
+        decision=ExtractionReview.Decision.ACCEPT,
+        reviewer="user:fixture",
+    )
+    model_admin = ExtractionReviewAdmin(ExtractionReview, admin.site)
+
+    assert set(model_admin.get_readonly_fields(None, review)) == {
+        field.name for field in ExtractionReview._meta.fields
+    }
+    assert model_admin.has_change_permission(None, review) is False
+    assert model_admin.has_delete_permission(None, review) is False
+
+
+def test_typed_candidate_digest_includes_canonical_record_content():
+    base = {
+        "stage": "typed",
+        "passage_id": "passage:1",
+        "subject": "Fett Law",
+        "predicate": "is_a",
+        "object": "object-type:law-firm",
+    }
+    first = {**base, "record_json": '{"name":"Fett Law","status":"declined"}'}
+    reordered = {
+        **base,
+        "record_json": '{ "status": "declined", "name": "Fett Law" }',
+    }
+    changed = {
+        **base,
+        "record_json": '{"name":"Fett Law","status":"accepted"}',
+    }
+
+    assert candidate_digest("tenant:1", first) == candidate_digest(
+        "tenant:1", reordered
+    )
+    assert candidate_digest("tenant:1", first) != candidate_digest(
+        "tenant:1", changed
+    )
+
+
+def test_fixture_typed_hashes_reject_supplied_provenance_mismatch():
+    object_type = {
+        "system": "Extract a law firm.",
+        "schema": {"type": "object"},
+        "prompt_hash": "0" * 64,
+    }
+
+    with pytest.raises(ValueError, match="prompt_hash"):
+        _typed_provenance_hashes(object_type)
 
 
 @pytest.mark.django_db

@@ -50,6 +50,7 @@ class ExtractionJobAdmin(admin.ModelAdmin):
         "status",
         "shard_count",
         "rows_total",
+        "error",
         "created_at",
     )
     list_filter = ("status", "operation", "source_kind", "tenant")
@@ -279,3 +280,16 @@ class ExtractionReviewAdmin(admin.ModelAdmin):
     search_fields = ("candidate_digest", "claim_id", "merge_target_claim_id", "reviewer")
     raw_id_fields = ("tenant", "job")
     readonly_fields = ("id", "created_at")
+
+    def get_readonly_fields(self, request, obj=None):
+        if obj is not None:
+            return tuple(field.name for field in self.model._meta.fields)
+        return super().get_readonly_fields(request, obj)
+
+    def has_change_permission(self, request, obj=None):
+        if obj is not None:
+            return False
+        return super().has_change_permission(request, obj)
+
+    def has_delete_permission(self, request, obj=None):
+        return False
