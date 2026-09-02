@@ -347,6 +347,14 @@ class ArtifactStore:
             lambda: self.client.delete_object(Bucket=self.bucket, Key=key),
         )
 
+    def delete_artifact(self, tenant_id: UUID, artifact_key: str) -> None:
+        """Delete one explicitly named artifact within the admitted tenant."""
+        key = self.validate_key(tenant_id, artifact_key)
+        self._storage_call(
+            "delete",
+            lambda: self.client.delete_object(Bucket=self.bucket, Key=key),
+        )
+
     def presign_get(self, tenant_id: UUID, artifact_key: str) -> str:
         key = self.validate_key(tenant_id, artifact_key)
         return self._storage_call(

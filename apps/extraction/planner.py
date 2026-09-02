@@ -6,7 +6,7 @@ import json
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 import pyarrow as pa
@@ -14,6 +14,7 @@ from django.conf import settings
 from django.db import transaction
 
 from apps.orchestration.artifacts import (
+    ArtifactStorageError,
     ArtifactStore,
     encode_arrow_ipc,
 )
@@ -27,6 +28,11 @@ class ExtractionPlanningError(ValueError):
 
 
 REMOTE_PAGE_SIZE = 1_000
+REMOTE_ESTIMATED_PASSAGE_BYTES = 1_024
+
+
+class _RemotePageTooLarge(ExtractionPlanningError):
+    """A page should be retried with a smaller requested row limit."""
 
 
 @dataclass(frozen=True)
@@ -113,37 +119,56 @@ def _remote_source_pages(
     )
     cursor: str | None = None
     seen_cursors: set[str] = set()
+    page_size = max(
+        1,
+        min(
+            REMOTE_PAGE_SIZE,
+            max_response_bytes // REMOTE_ESTIMATED_PASSAGE_BYTES,
+        ),
+    )
     try:
         while True:
-            query = {
-                "tenant": str(tenant_id),
-                "source": source_kind,
-                "limit": REMOTE_PAGE_SIZE,
-            }
-            if cursor is not None:
-                query["cursor"] = cursor
-            try:
-                with active_client.stream(
-                    "GET",
-                    "/internal/passages",
-                    params=query,
-                    headers={
-                        "Authorization": (
-                            f"Bearer {settings.THEOREM_MACHINE_KEY_PASSAGES}"
-                        )
-                    },
-                ) as response:
-                    response.raise_for_status()
-                    encoded = bytearray()
-                    for chunk in response.iter_bytes(chunk_size=64 * 1024):
-                        if len(encoded) + len(chunk) > max_response_bytes:
-                            raise ExtractionPlanningError(
-                                "passage listing page exceeds the response byte limit"
+            while True:
+                query = {
+                    "tenant": str(tenant_id),
+                    "source": source_kind,
+                    "limit": page_size,
+                }
+                if cursor is not None:
+                    query["cursor"] = cursor
+                try:
+                    with active_client.stream(
+                        "GET",
+                        "/internal/passages",
+                        params=query,
+                        headers={
+                            "Authorization": (
+                                f"Bearer {settings.THEOREM_MACHINE_KEY_PASSAGES}"
                             )
-                        encoded.extend(chunk)
-                payload = json.loads(encoded)
-            except (httpx.HTTPError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-                raise ExtractionPlanningError("passage listing request failed") from exc
+                        },
+                    ) as response:
+                        response.raise_for_status()
+                        encoded = bytearray()
+                        for chunk in response.iter_bytes(chunk_size=64 * 1024):
+                            if len(encoded) + len(chunk) > max_response_bytes:
+                                raise _RemotePageTooLarge(
+                                    "passage listing page exceeds the response byte limit"
+                                )
+                            encoded.extend(chunk)
+                    payload = json.loads(encoded)
+                    break
+                except _RemotePageTooLarge:
+                    if page_size == 1:
+                        raise
+                    page_size = max(1, page_size // 2)
+                except (
+                    httpx.HTTPError,
+                    UnicodeDecodeError,
+                    json.JSONDecodeError,
+                ) as exc:
+                    raise ExtractionPlanningError(
+                        "passage listing request failed"
+                    ) from exc
 
             raw_passages = (
                 payload.get("passages") if isinstance(payload, Mapping) else payload
@@ -270,8 +295,16 @@ def _split_table(table: pa.Table, max_input_bytes: int) -> list[pa.Table]:
     return shards
 
 
-def _input_key(tenant_id: UUID, job_id: UUID, index: int) -> str:
-    return f"tenants/{tenant_id}/extraction/{job_id}/in/{index}.arrow"
+def _input_key(
+    tenant_id: UUID,
+    job_id: UUID,
+    planning_id: UUID,
+    index: int,
+) -> str:
+    return (
+        f"tenants/{tenant_id}/extraction/{job_id}/in/"
+        f"{planning_id}/{index}.arrow"
+    )
 
 
 def _write_plan(
@@ -279,13 +312,14 @@ def _write_plan(
     store: ArtifactStore,
     tenant_id: UUID,
     job_id: UUID,
+    planning_id: UUID,
     index: int,
     table: pa.Table,
 ) -> ShardPlan:
     payload = encode_arrow_ipc(table)
     stored = store.write_table(
         tenant_id,
-        _input_key(tenant_id, job_id, index),
+        _input_key(tenant_id, job_id, planning_id, index),
         table,
     )
     return ShardPlan(
@@ -313,34 +347,50 @@ def plan_shards(
     except (KeyError, TypeError, ValueError) as exc:
         raise ExtractionPlanningError("source requires a UUID job_id") from exc
     active_store = store or ArtifactStore.from_settings()
+    planning_id = uuid4()
     plans: list[ShardPlan] = []
-    for table in _source_tables(
-        tenant_id,
-        source,
-        store=active_store,
-        http_client=http_client,
-        max_response_bytes=max(max_input_bytes * 2, 64 * 1024),
-    ):
-        for shard_table in _split_table(table, max_input_bytes):
+    try:
+        for table in _source_tables(
+            tenant_id,
+            source,
+            store=active_store,
+            http_client=http_client,
+            max_response_bytes=max(max_input_bytes * 2, 64 * 1024),
+        ):
+            for shard_table in _split_table(table, max_input_bytes):
+                plans.append(
+                    _write_plan(
+                        store=active_store,
+                        tenant_id=tenant_id,
+                        job_id=job_id,
+                        planning_id=planning_id,
+                        index=len(plans),
+                        table=shard_table,
+                    )
+                )
+        if not plans:
             plans.append(
                 _write_plan(
                     store=active_store,
                     tenant_id=tenant_id,
                     job_id=job_id,
-                    index=len(plans),
-                    table=shard_table,
+                    planning_id=planning_id,
+                    index=0,
+                    table=pa.Table.from_pylist([], schema=passage_schema()),
                 )
             )
-    if not plans:
-        plans.append(
-            _write_plan(
-                store=active_store,
-                tenant_id=tenant_id,
-                job_id=job_id,
-                index=0,
-                table=pa.Table.from_pylist([], schema=passage_schema()),
-            )
-        )
+    except Exception as planning_error:
+        cleanup_error = None
+        for plan in reversed(plans):
+            try:
+                active_store.delete_artifact(tenant_id, plan.artifact_key)
+            except ArtifactStorageError as exc:
+                cleanup_error = cleanup_error or exc
+        if cleanup_error is not None:
+            raise ArtifactStorageError(
+                "artifact storage cleanup failed after extraction planning"
+            ) from planning_error
+        raise
     return plans
 
 
@@ -362,6 +412,7 @@ def replan_shard(
         raise ExtractionPlanningError("a one-row shard cannot be split further")
     split_at = table.num_rows // 2
     replacements = [table.slice(0, split_at), table.slice(split_at)]
+    planning_id = uuid4()
     with transaction.atomic():
         locked_job = ExtractionJob.objects.select_for_update().get(id=shard.job_id)
         locked = ExtractionShard.objects.select_for_update().get(id=shard.id)
@@ -379,6 +430,7 @@ def replan_shard(
                 store=active_store,
                 tenant_id=locked.job.tenant_id,
                 job_id=locked.job_id,
+                planning_id=planning_id,
                 index=next_index + offset,
                 table=replacement,
             )

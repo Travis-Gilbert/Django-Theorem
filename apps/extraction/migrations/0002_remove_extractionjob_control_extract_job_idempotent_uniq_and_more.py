@@ -3,6 +3,30 @@
 from django.db import migrations, models
 
 
+def grant_error_column(apps, schema_editor):
+    if schema_editor.connection.vendor != 'postgresql':
+        return
+    with schema_editor.connection.cursor() as cursor:
+        cursor.execute("SELECT 1 FROM pg_roles WHERE rolname = 'theorem_spine'")
+        if cursor.fetchone() is not None:
+            cursor.execute(
+                "GRANT SELECT (error) ON control.control_extractionjob "
+                "TO theorem_spine"
+            )
+
+
+def revoke_error_column(apps, schema_editor):
+    if schema_editor.connection.vendor != 'postgresql':
+        return
+    with schema_editor.connection.cursor() as cursor:
+        cursor.execute("SELECT 1 FROM pg_roles WHERE rolname = 'theorem_spine'")
+        if cursor.fetchone() is not None:
+            cursor.execute(
+                "REVOKE SELECT (error) ON control.control_extractionjob "
+                "FROM theorem_spine"
+            )
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -24,4 +48,5 @@ class Migration(migrations.Migration):
             model_name='extractionjob',
             constraint=models.UniqueConstraint(fields=('tenant', 'operation', 'source_kind', 'params_hash', 'source_ref'), name='control_extract_job_idempotent_uniq'),
         ),
+        migrations.RunPython(grant_error_column, revoke_error_column),
     ]

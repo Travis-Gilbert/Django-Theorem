@@ -75,6 +75,10 @@ class MemoryS3Client:
     def generate_presigned_url(self, method, *, Params, ExpiresIn, HttpMethod):
         return f"https://storage.example/{Params['Key']}?method={method}"
 
+    def delete_object(self, *, Bucket, Key):
+        self.objects.pop((Bucket, Key), None)
+        return {}
+
 
 @pytest.fixture
 def artifact_store(monkeypatch) -> ArtifactStore:
@@ -270,7 +274,7 @@ def test_remote_source_is_planned_page_by_page(artifact_store):
 
     def handler(request: httpx.Request) -> httpx.Response:
         cursors.append(request.url.params.get("cursor"))
-        assert request.url.params["limit"] == "1000"
+        assert 1 <= int(request.url.params["limit"]) <= 1000
         assert request.headers["Authorization"] == "Bearer passages-key"
         if request.url.params.get("cursor") is None:
             return httpx.Response(
@@ -339,6 +343,81 @@ def test_remote_source_refuses_an_oversized_page(artifact_store):
             )
     finally:
         client.close()
+
+
+@pytest.mark.django_db
+@override_settings(THEOREM_MACHINE_KEY_PASSAGES="passages-key")
+def test_remote_source_retries_with_smaller_pages_before_sharding(artifact_store):
+    passages = [
+        {"passage_id": f"p{index}", "text": "x" * 3_000}
+        for index in range(40)
+    ]
+    requested_limits = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        limit = int(request.url.params["limit"])
+        requested_limits.append(limit)
+        offset = int(request.url.params.get("cursor", "0"))
+        page = passages[offset : offset + limit]
+        next_offset = offset + len(page)
+        payload = {"passages": page}
+        if next_offset < len(passages):
+            payload["next_cursor"] = str(next_offset)
+        return httpx.Response(200, json=payload)
+
+    with httpx.Client(
+        base_url="https://theorem.example",
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        plans = plan_shards(
+            uuid.uuid4(),
+            {
+                "job_id": str(uuid.uuid4()),
+                "source_kind": "web_corpus",
+                "source_ref": {},
+            },
+            32 * 1024,
+            store=artifact_store,
+            http_client=client,
+        )
+
+    assert requested_limits[:3] == [64, 32, 16]
+    assert sum(plan.rows for plan in plans) == 40
+    assert all(plan.byte_length <= 32 * 1024 for plan in plans)
+
+
+@pytest.mark.django_db
+@override_settings(THEOREM_MACHINE_KEY_PASSAGES="passages-key")
+def test_later_remote_page_failure_cleans_attempt_artifacts(artifact_store):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.params.get("cursor") is None:
+            return httpx.Response(
+                200,
+                json={
+                    "passages": [{"passage_id": "p1", "text": "valid"}],
+                    "next_cursor": "broken-page",
+                },
+            )
+        return httpx.Response(200, json={"passages": "not-a-list"})
+
+    with httpx.Client(
+        base_url="https://theorem.example",
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        with pytest.raises(ExtractionPlanningError, match="must return a list"):
+            plan_shards(
+                uuid.uuid4(),
+                {
+                    "job_id": str(uuid.uuid4()),
+                    "source_kind": "life_email",
+                    "source_ref": {},
+                },
+                64 * 1024,
+                store=artifact_store,
+                http_client=client,
+            )
+
+    assert artifact_store.client.objects == {}
 
 
 @pytest.mark.django_db
