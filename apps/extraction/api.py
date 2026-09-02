@@ -31,7 +31,11 @@ from apps.orchestration.tasks import cancel_job_task
 from apps.tenancy.models import Tenant
 
 from .models import ExtractionJob, ExtractionReview, ExtractionShard
-from .reviews import is_candidate_digest
+from .reviews import (
+    CANDIDATE_DIGEST_VERSION,
+    LEGACY_CANDIDATE_DIGEST_VERSION,
+    is_candidate_digest,
+)
 from .tasks import _contract, canonical_hash, submit_extraction
 
 
@@ -74,11 +78,13 @@ class ExtractionStatus(Schema):
     status: str
     shard_count: int
     rows_total: int
+    error: str = ""
     shards: list[ShardStatus]
 
 
 class ReviewItem(Schema):
     candidate_digest: str
+    candidate_digest_version: int = CANDIDATE_DIGEST_VERSION
     claim_id: str | None = None
     decision: str
     merge_target_claim_id: str | None = None
@@ -123,6 +129,21 @@ def _effective_params(body: SubmitRequest) -> dict[str, Any]:
     return params
 
 
+def _validate_typed_params(params: Mapping[str, Any]) -> None:
+    object_type = params.get("object_type")
+    if not isinstance(object_type, Mapping):
+        raise HttpError(400, "typed extraction requires params.object_type")
+    for name in ("object_type_id", "label_identifier_field", "system"):
+        value = object_type.get(name)
+        if not isinstance(value, str) or not value.strip():
+            raise HttpError(
+                400,
+                f"params.object_type.{name} must be a non-empty string",
+            )
+    if not isinstance(object_type.get("schema"), Mapping):
+        raise HttpError(400, "params.object_type.schema must be an object")
+
+
 @router.post("/submit", response=SubmitResponse)
 def submit(request, body: SubmitRequest):
     principal = require_machine_key(request, scope=EXTRACTION_SUBMIT_SCOPE)
@@ -133,10 +154,8 @@ def submit(request, body: SubmitRequest):
     _assert_tenant(body.source_ref, principal.tenant.id)
     _assert_tenant(body.params, principal.tenant.id)
     params = _effective_params(body)
-    if body.operation == ExtractionJob.Operation.TYPED and not isinstance(
-        params.get("object_type"), Mapping
-    ):
-        raise HttpError(400, "typed extraction requires params.object_type")
+    if body.operation == ExtractionJob.Operation.TYPED:
+        _validate_typed_params(params)
     source_ref = _canonical_object(body.source_ref)
     params_hash = canonical_hash(params)
     with transaction.atomic():
@@ -144,6 +163,7 @@ def submit(request, body: SubmitRequest):
         existing = ExtractionJob.objects.filter(
             tenant=principal.tenant,
             operation=body.operation,
+            source_kind=body.source_kind,
             params_hash=params_hash,
             source_ref=source_ref,
         ).first()
@@ -187,6 +207,11 @@ def review(request, body: list[ReviewItem]):
         for item in body:
             if not is_candidate_digest(item.candidate_digest):
                 raise HttpError(400, "candidate_digest must be sha256")
+            if item.candidate_digest_version not in {
+                LEGACY_CANDIDATE_DIGEST_VERSION,
+                CANDIDATE_DIGEST_VERSION,
+            }:
+                raise HttpError(400, "unsupported candidate_digest_version")
             if item.decision not in ExtractionReview.Decision.values:
                 raise HttpError(400, f"unsupported review decision: {item.decision}")
             job = None
@@ -200,6 +225,7 @@ def review(request, body: list[ReviewItem]):
                 tenant=principal.tenant,
                 job=job,
                 candidate_digest=item.candidate_digest.removeprefix("sha256:"),
+                candidate_digest_version=item.candidate_digest_version,
                 claim_id=item.claim_id,
                 decision=item.decision,
                 merge_target_claim_id=item.merge_target_claim_id,
@@ -231,6 +257,7 @@ def reviews_since(request, since: str):
         {
             "id": str(item.id),
             "candidate_digest": item.candidate_digest,
+            "candidate_digest_version": item.candidate_digest_version,
             "claim_id": item.claim_id,
             "decision": item.decision,
             "merge_target_claim_id": item.merge_target_claim_id,
@@ -289,6 +316,7 @@ def status(request, job_id: UUID):
         status=job.status,
         shard_count=job.shard_count,
         rows_total=job.rows_total,
+        error=job.error,
         shards=shards,
     )
 

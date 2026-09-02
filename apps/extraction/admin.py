@@ -21,7 +21,11 @@ from apps.orchestration.artifacts import (
 from apps.orchestration.tasks import cancel_job_task, re_run_job
 
 from .models import ExtractionJob, ExtractionReview, ExtractionShard
-from .reviews import candidate_digest
+from .reviews import (
+    CANDIDATE_DIGEST_VERSION,
+    candidate_digest,
+    legacy_candidate_digest,
+)
 
 
 class ExtractionShardInline(admin.TabularInline):
@@ -50,6 +54,7 @@ class ExtractionJobAdmin(admin.ModelAdmin):
         "status",
         "shard_count",
         "rows_total",
+        "error",
         "created_at",
     )
     list_filter = ("status", "operation", "source_kind", "tenant")
@@ -179,6 +184,11 @@ class ExtractionShardAdmin(admin.ModelAdmin):
         for raw in table.to_pylist():
             row = dict(raw)
             row["candidate_digest"] = candidate_digest(str(shard.job.tenant_id), row)
+            row["candidate_digest_version"] = CANDIDATE_DIGEST_VERSION
+            row["legacy_candidate_digest"] = legacy_candidate_digest(
+                str(shard.job.tenant_id),
+                row,
+            )
             rows.append(row)
         return rows
 
@@ -269,6 +279,7 @@ class ExtractionShardAdmin(admin.ModelAdmin):
 class ExtractionReviewAdmin(admin.ModelAdmin):
     list_display = (
         "candidate_digest",
+        "candidate_digest_version",
         "tenant",
         "decision",
         "job",
@@ -279,3 +290,16 @@ class ExtractionReviewAdmin(admin.ModelAdmin):
     search_fields = ("candidate_digest", "claim_id", "merge_target_claim_id", "reviewer")
     raw_id_fields = ("tenant", "job")
     readonly_fields = ("id", "created_at")
+
+    def get_readonly_fields(self, request, obj=None):
+        if obj is not None:
+            return tuple(field.name for field in self.model._meta.fields)
+        return super().get_readonly_fields(request, obj)
+
+    def has_change_permission(self, request, obj=None):
+        if obj is not None:
+            return False
+        return super().has_change_permission(request, obj)
+
+    def has_delete_permission(self, request, obj=None):
+        return False
