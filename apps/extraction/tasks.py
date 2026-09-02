@@ -176,22 +176,31 @@ def submit_extraction(job_id: str) -> dict[str, Any]:
         return {"status": "failed", "error": str(exc)}
     abandoned_result = None
     shards = []
-    with transaction.atomic():
-        locked = ExtractionJob.objects.select_for_update().get(id=job.id)
-        if locked.status == ExtractionJob.Status.CANCELED:
-            abandoned_result = {"status": "canceled"}
-        elif locked.shards.exists():
-            abandoned_result = {"status": locked.status, "reused": True}
-        else:
-            shards = [_create_shard(locked, plan) for plan in plans]
-            locked.shard_count = len(shards)
-            locked.status = ExtractionJob.Status.RUNNING
-            locked.error = ""
-            locked.save(
-                update_fields=["shard_count", "status", "error", "updated_at"]
-            )
-            for shard in shards:
-                _create_orchestration_job(shard)
+    try:
+        with transaction.atomic():
+            locked = ExtractionJob.objects.select_for_update().get(id=job.id)
+            if locked.status == ExtractionJob.Status.CANCELED:
+                abandoned_result = {"status": "canceled"}
+            elif locked.shards.exists():
+                abandoned_result = {"status": locked.status, "reused": True}
+            else:
+                shards = [_create_shard(locked, plan) for plan in plans]
+                locked.shard_count = len(shards)
+                locked.status = ExtractionJob.Status.RUNNING
+                locked.error = ""
+                locked.save(
+                    update_fields=["shard_count", "status", "error", "updated_at"]
+                )
+                for shard in shards:
+                    _create_orchestration_job(shard)
+    except Exception as adoption_error:
+        try:
+            discard_plans(job.tenant_id, plans)
+        except ArtifactStorageError:
+            raise ArtifactStorageError(
+                "artifact storage cleanup failed after shard adoption"
+            ) from adoption_error
+        raise
     if abandoned_result is not None:
         discard_plans(job.tenant_id, plans)
         return abandoned_result

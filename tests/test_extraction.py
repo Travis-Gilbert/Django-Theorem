@@ -772,6 +772,55 @@ def test_successful_losing_planner_discards_its_attempt_artifacts(
 
 
 @pytest.mark.django_db
+def test_failed_shard_adoption_discards_planned_artifacts(
+    artifact_store,
+    monkeypatch,
+):
+    tenant = Tenant.objects.create(
+        slug=f"adoption-failure-{uuid.uuid4()}",
+        display_name="Adoption failure",
+    )
+    job = ExtractionJob.objects.create(
+        tenant=tenant,
+        operation=ExtractionJob.Operation.ATLAS,
+        source_kind=ExtractionJob.SourceKind.WEB_CORPUS,
+        params_hash="3" * 64,
+    )
+
+    def plan_for_failed_adoption(*args, **kwargs):
+        table = _fixture_input_table().slice(0, 1)
+        stored = artifact_store.write_table(
+            tenant.id,
+            f"tenants/{tenant.id}/extraction/{job.id}/in/failed/0.arrow",
+            table,
+        )
+        return [
+            ShardPlan(
+                index=0,
+                artifact_key=stored.artifact_key,
+                payload_digest=stored.payload_digest,
+                schema_json=stored.schema_json,
+                rows=stored.rows,
+                byte_length=len(encode_arrow_ipc(table)),
+            )
+        ]
+
+    monkeypatch.setattr("apps.extraction.tasks.plan_shards", plan_for_failed_adoption)
+    monkeypatch.setattr(
+        "apps.extraction.tasks._create_orchestration_job",
+        lambda shard: (_ for _ in ()).throw(RuntimeError("adoption failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="adoption failed"):
+        submit_extraction(str(job.id))
+
+    job.refresh_from_db()
+    assert job.status == ExtractionJob.Status.QUEUED
+    assert job.shards.count() == 0
+    assert artifact_store.client.objects == {}
+
+
+@pytest.mark.django_db
 def test_planning_failure_is_persisted_and_exposed(extraction_client, monkeypatch):
     job = ExtractionJob.objects.create(
         tenant=extraction_client.tenant,
