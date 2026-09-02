@@ -142,7 +142,7 @@ def _remote_source_pages(
                             )
                         encoded.extend(chunk)
                 payload = json.loads(encoded)
-            except (httpx.HTTPError, json.JSONDecodeError) as exc:
+            except (httpx.HTTPError, UnicodeDecodeError, json.JSONDecodeError) as exc:
                 raise ExtractionPlanningError("passage listing request failed") from exc
 
             raw_passages = (

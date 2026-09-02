@@ -556,23 +556,14 @@ def _typed_rows_from_records(
     records: Sequence[Mapping[str, Any]],
     params: Mapping[str, Any],
     contract: Mapping[str, Any],
+    provenance_hashes: tuple[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     object_type = params["object_type"]
     label_field = object_type["label_identifier_field"]
     object_type_id = object_type["object_type_id"]
-    schema_text = json.dumps(object_type["schema"], sort_keys=True, separators=(",", ":"))
-    prompt_hash = hashlib.sha256(
-        object_type["system"].encode("utf-8")
-    ).hexdigest()
-    schema_hash = hashlib.sha256(
-        schema_text.encode("utf-8")
-    ).hexdigest()
-    supplied_prompt_hash = object_type.get("prompt_hash")
-    if supplied_prompt_hash is not None and supplied_prompt_hash != prompt_hash:
-        raise ValueError("typed prompt_hash does not match object_type.system")
-    supplied_schema_hash = object_type.get("schema_hash")
-    if supplied_schema_hash is not None and supplied_schema_hash != schema_hash:
-        raise ValueError("typed schema_hash does not match object_type.schema")
+    prompt_hash, schema_hash = provenance_hashes or _typed_provenance_hashes(
+        object_type
+    )
     rows = []
     for record in records:
         subject = record.get(label_field)
@@ -599,11 +590,36 @@ def _typed_rows_from_records(
     return rows
 
 
+def _typed_provenance_hashes(
+    object_type: Mapping[str, Any],
+) -> tuple[str, str]:
+    schema_text = json.dumps(
+        object_type["schema"],
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    prompt_hash = hashlib.sha256(
+        object_type["system"].encode("utf-8")
+    ).hexdigest()
+    schema_hash = hashlib.sha256(
+        schema_text.encode("utf-8")
+    ).hexdigest()
+    supplied_prompt_hash = object_type.get("prompt_hash")
+    if supplied_prompt_hash is not None and supplied_prompt_hash != prompt_hash:
+        raise ValueError("typed prompt_hash does not match object_type.system")
+    supplied_schema_hash = object_type.get("schema_hash")
+    if supplied_schema_hash is not None and supplied_schema_hash != schema_hash:
+        raise ValueError("typed schema_hash does not match object_type.schema")
+    return prompt_hash, schema_hash
+
+
 def _run_typed(
     table: pa.Table,
     params: Mapping[str, Any],
     contract: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
+    provenance_hashes = _typed_provenance_hashes(params["object_type"])
     from jsonschema import validate
     from openai import OpenAI
 
@@ -654,6 +670,7 @@ def _run_typed(
                 records=records,
                 params=params,
                 contract=contract,
+                provenance_hashes=provenance_hashes,
             )
         )
     return _canonical_rows(rows)
@@ -690,6 +707,7 @@ class FixtureModelClient:
         params: Mapping[str, Any],
         contract: Mapping[str, Any],
     ) -> list[dict[str, Any]]:
+        provenance_hashes = _typed_provenance_hashes(params["object_type"])
         records = self.fixture["stub_responses"]["typed_records_by_passage"]
         rows: list[dict[str, Any]] = []
         for passage in _passages(table):
@@ -699,6 +717,7 @@ class FixtureModelClient:
                     records=records.get(passage["passage_id"], []),
                     params=params,
                     contract=contract,
+                    provenance_hashes=provenance_hashes,
                 )
             )
         return _canonical_rows(rows)

@@ -37,6 +37,7 @@ from apps.extraction.planner import (
 )
 from apps.extraction.tasks import (
     _typed_provenance_hashes,
+    complete_extraction_stub,
     reconcile_extraction,
     submit_extraction,
 )
@@ -341,6 +342,29 @@ def test_remote_source_refuses_an_oversized_page(artifact_store):
 
 
 @pytest.mark.django_db
+@override_settings(THEOREM_MACHINE_KEY_PASSAGES="passages-key")
+def test_remote_source_wraps_invalid_utf8_as_planning_failure(artifact_store):
+    with httpx.Client(
+        base_url="https://theorem.example",
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, content=b"\xff")
+        ),
+    ) as client:
+        with pytest.raises(ExtractionPlanningError, match="listing request failed"):
+            plan_shards(
+                uuid.uuid4(),
+                {
+                    "job_id": str(uuid.uuid4()),
+                    "source_kind": "web_corpus",
+                    "source_ref": {},
+                },
+                64 * 1024,
+                store=artifact_store,
+                http_client=client,
+            )
+
+
+@pytest.mark.django_db
 def test_refused_shard_replans_into_two_and_is_superseded(artifact_store):
     tenant = Tenant.objects.create(slug=f"replan-{uuid.uuid4()}", display_name="Replan")
     job = ExtractionJob.objects.create(
@@ -472,6 +496,105 @@ def test_planning_failure_is_persisted_and_exposed(extraction_client, monkeypatc
     assert job.error == "fixture planning refused"
     assert response.status_code == 200
     assert response.json()["error"] == "fixture planning refused"
+
+
+@pytest.mark.django_db
+def test_losing_planner_cannot_fail_a_job_with_existing_shards(monkeypatch):
+    tenant = Tenant.objects.create(
+        slug=f"planner-race-{uuid.uuid4()}",
+        display_name="Planner race",
+    )
+    job = ExtractionJob.objects.create(
+        tenant=tenant,
+        operation=ExtractionJob.Operation.ATLAS,
+        source_kind=ExtractionJob.SourceKind.WEB_CORPUS,
+        params_hash="5" * 64,
+    )
+
+    def competing_planner(*args, **kwargs):
+        ExtractionShard.objects.create(
+            job=job,
+            index=0,
+            input_artifact_key=f"tenants/{tenant.id}/winner.arrow",
+            input_digest="sha256:" + "2" * 64,
+            input_schema_json="{}",
+            input_rows=1,
+        )
+        ExtractionJob.objects.filter(id=job.id).update(
+            status=ExtractionJob.Status.RUNNING,
+            shard_count=1,
+        )
+        raise ExtractionPlanningError("losing planner failed")
+
+    monkeypatch.setattr("apps.extraction.tasks.plan_shards", competing_planner)
+
+    result = submit_extraction(str(job.id))
+
+    job.refresh_from_db()
+    assert result == {"status": "running", "reused": True}
+    assert job.status == ExtractionJob.Status.RUNNING
+    assert job.error == ""
+    assert job.shards.count() == 1
+
+
+@pytest.mark.django_db
+@override_settings(OFFLOAD_EXECUTION_MODE="stub")
+def test_stub_typed_hash_rejection_fails_orchestration_and_parent(
+    artifact_store,
+):
+    tenant = Tenant.objects.create(
+        slug=f"stub-hash-{uuid.uuid4()}",
+        display_name="Stub hash",
+    )
+    parent = ExtractionJob.objects.create(
+        tenant=tenant,
+        operation=ExtractionJob.Operation.TYPED,
+        source_kind=ExtractionJob.SourceKind.ARTIFACT,
+        params_hash="4" * 64,
+        status=ExtractionJob.Status.RUNNING,
+    )
+    stored = artifact_store.write_table(
+        tenant.id,
+        f"tenants/{tenant.id}/inputs/stub-hash.arrow",
+        _fixture_input_table(),
+    )
+    params = json.loads(json.dumps(FIXTURE["typed_params"]))
+    params["tenant_id"] = str(tenant.id)
+    params["job_id"] = str(parent.id)
+    params["object_type"]["schema_hash"] = "0" * 64
+    orchestration_job = OrchestrationJob.objects.create(
+        tenant=tenant,
+        operation="data_science.extraction.typed",
+        operation_id=f"stub-hash-{uuid.uuid4()}",
+        input_payload_digest=stored.payload_digest,
+        kwargs_json={
+            "input_artifact_key": stored.artifact_key,
+            "input_schema_json": stored.schema_json,
+            "input_rows": stored.rows,
+            "params": params,
+        },
+        status=OrchestrationJob.Status.RUNNING,
+    )
+    ExtractionShard.objects.create(
+        job=parent,
+        index=0,
+        orchestration_job=orchestration_job,
+        input_artifact_key=stored.artifact_key,
+        input_digest=stored.payload_digest,
+        input_schema_json=stored.schema_json,
+        input_rows=stored.rows,
+        status=ExtractionShard.Status.RUNNING,
+    )
+
+    result = complete_extraction_stub(str(orchestration_job.id))
+    reconciled = reconcile_extraction(str(parent.id))
+
+    orchestration_job.refresh_from_db()
+    parent.refresh_from_db()
+    assert result["status"] == "failed"
+    assert "schema_hash" in orchestration_job.error
+    assert reconciled["status"] == ExtractionJob.Status.FAILED
+    assert parent.status == ExtractionJob.Status.FAILED
 
 
 @pytest.mark.django_db

@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+from apps.extraction.tasks import _typed_provenance_hashes as django_typed_hashes
+
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTRACT_PATH = ROOT / "contracts/theorem.extraction.v1.json"
@@ -182,6 +184,36 @@ def test_typed_worker_derives_and_verifies_prompt_and_schema_hashes():
             records=[record],
             params=params,
             contract=json.loads(CONTRACT_PATH.read_text()),
+        )
+
+
+def test_typed_schema_hash_uses_same_unicode_canonicalization_in_both_lanes():
+    worker = _worker()
+    object_type = {
+        "system": "Extraire le cabinet.",
+        "schema": {
+            "type": "object",
+            "description": "Un cabinet à Montréal",
+        },
+    }
+
+    assert worker._typed_provenance_hashes(object_type) == django_typed_hashes(
+        object_type
+    )
+
+
+def test_empty_typed_input_rejects_hash_mismatch_before_model_setup():
+    worker = _worker()
+    fixture = json.loads(FIXTURE_PATH.read_text())
+    params = copy.deepcopy(fixture["typed_params"])
+    params["object_type"]["prompt_hash"] = "0" * 64
+    empty = worker.pa.Table.from_pylist([], schema=worker.input_schema())
+
+    with pytest.raises(ValueError, match="prompt_hash"):
+        worker._run_typed(
+            empty,
+            params,
+            json.loads(CONTRACT_PATH.read_text()),
         )
 
 

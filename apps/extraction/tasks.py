@@ -21,7 +21,7 @@ from apps.orchestration.artifacts import (
     ArtifactValidationError,
 )
 from apps.orchestration.models import Job as OrchestrationJob
-from apps.orchestration.tasks import _post_provenance, dispatch_offload
+from apps.orchestration.tasks import _fail_job, _post_provenance, dispatch_offload
 
 from .models import ExtractionJob, ExtractionShard
 from .planner import ExtractionPlanningError, ShardPlan, plan_shards, replan_shard
@@ -156,6 +156,8 @@ def submit_extraction(job_id: str) -> dict[str, Any]:
             locked = ExtractionJob.objects.select_for_update().get(id=job.id)
             if locked.status == ExtractionJob.Status.CANCELED:
                 return {"status": "canceled"}
+            if locked.shards.exists():
+                return {"status": locked.status, "reused": True}
             locked.status = ExtractionJob.Status.FAILED
             locked.error = str(exc)
             locked.save(update_fields=["status", "error", "updated_at"])
@@ -284,7 +286,10 @@ def complete_extraction_stub(job_id: str) -> dict[str, Any]:
         expected_schema_json=job.kwargs_json["input_schema_json"],
         expected_rows=job.kwargs_json["input_rows"],
     )
-    rows = _stub_rows(job, input_table)
+    try:
+        rows = _stub_rows(job, input_table)
+    except (KeyError, TypeError, ValueError) as exc:
+        return _fail_job(job_id, str(exc), log_prefix="FixtureExtraction")
     contract = _contract()
     output = store.write_table(
         job.tenant_id,
