@@ -68,7 +68,7 @@ GRANT SELECT (
 ) ON control.control_extractionjob TO theorem_spine;
 
 GRANT SELECT (
-  id, tenant_id, job_id, candidate_digest, claim_id, decision,
+  id, tenant_id, job_id, candidate_digest, candidate_digest_version, claim_id, decision,
   merge_target_claim_id, reason, reviewer, created_at
 ) ON control.control_extractionreview TO theorem_spine;
 

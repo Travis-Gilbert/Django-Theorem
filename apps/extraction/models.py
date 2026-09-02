@@ -142,6 +142,7 @@ class ExtractionReview(models.Model):
         blank=True,
     )
     candidate_digest = models.CharField(max_length=71, db_index=True)
+    candidate_digest_version = models.PositiveSmallIntegerField(default=2)
     claim_id = models.CharField(max_length=512, null=True, blank=True)
     decision = models.CharField(max_length=16, choices=Decision.choices)
     merge_target_claim_id = models.CharField(max_length=512, null=True, blank=True)

@@ -104,6 +104,7 @@ def test_d3_columns_present():
             "tenant_id",
             "job_id",
             "candidate_digest",
+            "candidate_digest_version",
             "claim_id",
             "decision",
             "merge_target_claim_id",
@@ -201,8 +202,8 @@ def test_theorem_spine_can_select_control_tenant():
         ),
         (
             "control_extractionreview",
-            "id, tenant_id, job_id, candidate_digest, claim_id, decision, "
-            "merge_target_claim_id, reason, reviewer, created_at",
+            "id, tenant_id, job_id, candidate_digest, candidate_digest_version, "
+            "claim_id, decision, merge_target_claim_id, reason, reviewer, created_at",
         ),
     ],
 )

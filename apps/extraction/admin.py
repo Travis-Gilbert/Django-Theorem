@@ -21,7 +21,11 @@ from apps.orchestration.artifacts import (
 from apps.orchestration.tasks import cancel_job_task, re_run_job
 
 from .models import ExtractionJob, ExtractionReview, ExtractionShard
-from .reviews import candidate_digest
+from .reviews import (
+    CANDIDATE_DIGEST_VERSION,
+    candidate_digest,
+    legacy_candidate_digest,
+)
 
 
 class ExtractionShardInline(admin.TabularInline):
@@ -180,6 +184,11 @@ class ExtractionShardAdmin(admin.ModelAdmin):
         for raw in table.to_pylist():
             row = dict(raw)
             row["candidate_digest"] = candidate_digest(str(shard.job.tenant_id), row)
+            row["candidate_digest_version"] = CANDIDATE_DIGEST_VERSION
+            row["legacy_candidate_digest"] = legacy_candidate_digest(
+                str(shard.job.tenant_id),
+                row,
+            )
             rows.append(row)
         return rows
 
@@ -270,6 +279,7 @@ class ExtractionShardAdmin(admin.ModelAdmin):
 class ExtractionReviewAdmin(admin.ModelAdmin):
     list_display = (
         "candidate_digest",
+        "candidate_digest_version",
         "tenant",
         "decision",
         "job",

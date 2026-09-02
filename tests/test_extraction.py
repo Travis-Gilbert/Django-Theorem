@@ -42,10 +42,16 @@ from apps.extraction.tasks import (
     reconcile_extraction,
     submit_extraction,
 )
-from apps.extraction.reviews import candidate_digest
+from apps.extraction.reviews import (
+    CANDIDATE_DIGEST_VERSION,
+    LEGACY_CANDIDATE_DIGEST_VERSION,
+    candidate_digest,
+    candidate_digest_for_version,
+)
 from apps.keys.mint import mint_api_key
 from apps.orchestration.artifacts import (
     ARROW_IPC_CONTENT_TYPE,
+    ArtifactStorageError,
     ArtifactStore,
     ArtifactValidationError,
     decode_arrow_ipc,
@@ -247,11 +253,11 @@ def test_reverse_migration_preserves_source_kind_collisions():
 
     first.refresh_from_db()
     second.refresh_from_db()
-    assert first.source_ref == {}
-    rollback = second.source_ref["__theorem_rollback__"]
-    assert rollback["job_id"] == str(second.id)
-    assert rollback["source_kind"] == ExtractionJob.SourceKind.LIFE_EMAIL
-    assert rollback["source_ref"] == {}
+    for job in (first, second):
+        rollback = job.source_ref["__theorem_rollback__"]
+        assert rollback["job_id"] == str(job.id)
+        assert rollback["source_kind"] == job.source_kind
+        assert rollback["source_ref"] == {}
 
 
 @pytest.mark.django_db
@@ -572,6 +578,56 @@ def test_replan_refuses_tampered_input_artifact(artifact_store):
 
     with pytest.raises(ArtifactValidationError, match="digest"):
         replan_shard(shard, store=artifact_store)
+
+
+@pytest.mark.django_db
+def test_replan_failure_cleans_partial_replacement_artifacts(
+    artifact_store,
+    monkeypatch,
+):
+    tenant = Tenant.objects.create(
+        slug=f"replan-cleanup-{uuid.uuid4()}",
+        display_name="Replan cleanup",
+    )
+    job = ExtractionJob.objects.create(
+        tenant=tenant,
+        operation=ExtractionJob.Operation.ATLAS,
+        source_kind=ExtractionJob.SourceKind.ARTIFACT,
+        params_hash="1" * 64,
+    )
+    table = _fixture_input_table()
+    key = f"tenants/{tenant.id}/extraction/{job.id}/in/original.arrow"
+    stored = artifact_store.write_table(tenant.id, key, table)
+    shard = ExtractionShard.objects.create(
+        job=job,
+        index=0,
+        input_artifact_key=stored.artifact_key,
+        input_digest=stored.payload_digest,
+        input_schema_json=stored.schema_json,
+        input_rows=stored.rows,
+        status=ExtractionShard.Status.FAILED,
+    )
+    original_write = artifact_store.write_table
+    replacement_writes = 0
+
+    def fail_second_replacement(tenant_id, artifact_key, replacement):
+        nonlocal replacement_writes
+        replacement_writes += 1
+        if replacement_writes == 2:
+            raise ArtifactStorageError("second replacement failed")
+        return original_write(tenant_id, artifact_key, replacement)
+
+    monkeypatch.setattr(artifact_store, "write_table", fail_second_replacement)
+
+    with pytest.raises(ArtifactStorageError, match="second replacement failed"):
+        replan_shard(shard, store=artifact_store)
+
+    shard.refresh_from_db()
+    assert shard.status == ExtractionShard.Status.FAILED
+    assert job.shards.count() == 1
+    assert set(artifact_store.client.objects) == {
+        (artifact_store.bucket, stored.artifact_key)
+    }
 
 
 @pytest.mark.django_db
@@ -961,6 +1017,25 @@ def test_review_feed_route_is_not_shadowed_by_job_route(extraction_client):
 
 
 @pytest.mark.django_db
+def test_review_feed_preserves_legacy_digest_version(extraction_client):
+    review = ExtractionReview.objects.create(
+        tenant=extraction_client.tenant,
+        candidate_digest="e" * 64,
+        candidate_digest_version=LEGACY_CANDIDATE_DIGEST_VERSION,
+        decision=ExtractionReview.Decision.ACCEPT,
+        reviewer="migration:fixture",
+    )
+
+    response = extraction_client.get(
+        "/internal/extraction/review?since=2026-01-01T00:00:00Z"
+    )
+
+    assert response.status_code == 200
+    assert response.json()[0]["candidate_digest"] == review.candidate_digest
+    assert response.json()[0]["candidate_digest_version"] == 1
+
+
+@pytest.mark.django_db
 def test_review_api_reports_invalid_merge_as_bad_request(extraction_client):
     response = extraction_client.post(
         "/internal/extraction/review",
@@ -1114,6 +1189,16 @@ def test_typed_candidate_digest_includes_canonical_record_content():
     assert candidate_digest("tenant:1", first) != candidate_digest(
         "tenant:1", changed
     )
+    assert candidate_digest_for_version(
+        "tenant:1",
+        first,
+        LEGACY_CANDIDATE_DIGEST_VERSION,
+    ) == candidate_digest_for_version(
+        "tenant:1",
+        changed,
+        LEGACY_CANDIDATE_DIGEST_VERSION,
+    )
+    assert CANDIDATE_DIGEST_VERSION == 2
 
 
 def test_fixture_typed_hashes_reject_supplied_provenance_mismatch():

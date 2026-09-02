@@ -428,38 +428,49 @@ def replan_shard(
     split_at = table.num_rows // 2
     replacements = [table.slice(0, split_at), table.slice(split_at)]
     planning_id = uuid4()
-    with transaction.atomic():
-        locked_job = ExtractionJob.objects.select_for_update().get(id=shard.job_id)
-        locked = ExtractionShard.objects.select_for_update().get(id=shard.id)
-        if locked.status == ExtractionShard.Status.SUPERSEDED:
-            return []
-        next_index = (
-            locked_job.shards.order_by("-index")
-            .values_list("index", flat=True)
-            .first()
-            or 0
-        ) + 1
-        created = []
-        for offset, replacement in enumerate(replacements):
-            plan = _write_plan(
-                store=active_store,
-                tenant_id=locked.job.tenant_id,
-                job_id=locked.job_id,
-                planning_id=planning_id,
-                index=next_index + offset,
-                table=replacement,
-            )
-            created.append(
-                ExtractionShard.objects.create(
-                    job=locked_job,
-                    index=plan.index,
-                    input_artifact_key=plan.artifact_key,
-                    input_digest=plan.payload_digest,
-                    input_schema_json=plan.schema_json,
-                    input_rows=plan.rows,
-                    status=ExtractionShard.Status.QUEUED,
+    written_plans: list[ShardPlan] = []
+    try:
+        with transaction.atomic():
+            locked_job = ExtractionJob.objects.select_for_update().get(id=shard.job_id)
+            locked = ExtractionShard.objects.select_for_update().get(id=shard.id)
+            if locked.status == ExtractionShard.Status.SUPERSEDED:
+                return []
+            next_index = (
+                locked_job.shards.order_by("-index")
+                .values_list("index", flat=True)
+                .first()
+                or 0
+            ) + 1
+            created = []
+            for offset, replacement in enumerate(replacements):
+                plan = _write_plan(
+                    store=active_store,
+                    tenant_id=locked.job.tenant_id,
+                    job_id=locked.job_id,
+                    planning_id=planning_id,
+                    index=next_index + offset,
+                    table=replacement,
                 )
-            )
-        locked.status = ExtractionShard.Status.SUPERSEDED
-        locked.save(update_fields=["status", "updated_at"])
+                written_plans.append(plan)
+                created.append(
+                    ExtractionShard.objects.create(
+                        job=locked_job,
+                        index=plan.index,
+                        input_artifact_key=plan.artifact_key,
+                        input_digest=plan.payload_digest,
+                        input_schema_json=plan.schema_json,
+                        input_rows=plan.rows,
+                        status=ExtractionShard.Status.QUEUED,
+                    )
+                )
+            locked.status = ExtractionShard.Status.SUPERSEDED
+            locked.save(update_fields=["status", "updated_at"])
+    except Exception as replan_error:
+        try:
+            discard_plans(shard.job.tenant_id, written_plans, store=active_store)
+        except ArtifactStorageError:
+            raise ArtifactStorageError(
+                "artifact storage cleanup failed after shard replanning"
+            ) from replan_error
+        raise
     return created

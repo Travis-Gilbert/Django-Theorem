@@ -246,6 +246,7 @@ def reviews_since(request, since: str):
         {
             "id": str(item.id),
             "candidate_digest": item.candidate_digest,
+            "candidate_digest_version": item.candidate_digest_version,
             "claim_id": item.claim_id,
             "decision": item.decision,
             "merge_target_claim_id": item.merge_target_claim_id,

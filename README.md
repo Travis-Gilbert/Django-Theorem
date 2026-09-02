@@ -124,7 +124,7 @@ Django sets `search_path=control,public`. Settings force
 | `control_plan` | `code`, `limits` |
 | `control_apikey` | `id`, `tenant_id`, `key_hash`, `scopes`, `revoked_at`, `expires_at` |
 | `control_extractionjob` | `id`, `tenant_id`, `operation`, `contract_version`, `source_kind`, `source_ref`, `params`, `params_hash`, `status`, `shard_count`, `rows_total`, `error`, `created_at`, `updated_at` |
-| `control_extractionreview` | `id`, `tenant_id`, `job_id`, `candidate_digest`, `claim_id`, `decision`, `merge_target_claim_id`, `reason`, `reviewer`, `created_at` |
+| `control_extractionreview` | `id`, `tenant_id`, `job_id`, `candidate_digest`, `candidate_digest_version`, `claim_id`, `decision`, `merge_target_claim_id`, `reason`, `reviewer`, `created_at` |
 
 ## HTTP surface
 
