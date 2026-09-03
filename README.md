@@ -21,6 +21,7 @@ content-addressed prior/model artifacts, and exposes inspectable recovery state.
 - argon2-cffi (machine key hashes)
 - psycopg (Postgres via PgBouncer)
 - RunPod Serverless v2 lifecycle client for GPU/Python workloads
+- RunPod Pods REST lifecycle client for long-running Prime-RL jobs
 - Separate Fly app and Celery queue `offload.r` for R workloads (agent name `"R"`)
 - Debian Graphviz 2.42.2-7+deb12u1 (linked runtime 2.43.0)/PyGraphviz positions plus bounded PlantUML and Diagrams rendering
 
@@ -82,6 +83,12 @@ preflight as the Fly R worker before starting Celery.
 | `RUNPOD_EXTRACTION_ENDPOINT_ID` | Dedicated queue endpoint for the pinned extraction worker image |
 | `RUNPOD_EXTRACTION_IMAGE_DIGEST` | Immutable extraction image digest stamped on extraction provenance |
 | `RUNPOD_JOB_TIMEOUT_SECONDS` | Control-plane deadline; timeout cancels the RunPod job |
+| `RUNPOD_PODS_API_BASE` | RunPod Pods REST base URL; defaults to `https://rest.runpod.io/v1` |
+| `RL_RUNPOD_IMAGE_DIGEST` | Immutable default Prime-RL Pod image reference |
+| `RL_RUNPOD_GPU_TYPE` / `RL_RUNPOD_CLOUD_TYPE` | Pod GPU type and placement |
+| `RL_RUNPOD_POLL_INTERVAL_SECONDS` | Pod status polling interval |
+| `RL_RUNPOD_DEADLINE_SECONDS` | Training deadline; expiration terminates the Pod |
+| `RL_EVAL_DEADLINE_SECONDS` | Local verifiers evaluation worker deadline |
 | `R_OFFLOAD_EXECUTION_MODE` | `stub` for local/tests; `rpy2` only in the R worker image |
 | `THEOREM_API_BASE` | Rust API base for provenance write-back |
 | `THEOREM_MACHINE_KEY` | Bearer key scoped `provenance:write` |
@@ -125,6 +132,7 @@ Django sets `search_path=control,public`. Settings force
 | `control_apikey` | `id`, `tenant_id`, `key_hash`, `scopes`, `revoked_at`, `expires_at` |
 | `control_extractionjob` | `id`, `tenant_id`, `operation`, `contract_version`, `source_kind`, `source_ref`, `params`, `params_hash`, `status`, `shard_count`, `rows_total`, `error`, `created_at`, `updated_at` |
 | `control_extractionreview` | `id`, `tenant_id`, `job_id`, `candidate_digest`, `candidate_digest_version`, `claim_id`, `decision`, `merge_target_claim_id`, `reason`, `reviewer`, `created_at` |
+| `control_trainingrun` | `id`, `tenant_id`, `taskset_ref`, `status`, `config_digest` |
 
 ## HTTP surface
 
@@ -138,6 +146,10 @@ Django sets `search_path=control,public`. Settings force
 - `POST /internal/extraction/{job_id}/cancel` — cancel every non-terminal shard
 - `POST /internal/extraction/review` — append candidate review decisions
 - `GET /internal/extraction/review?since=<iso>` — stream decisions for non-spine callers
+- `POST /internal/rl/eval` — enqueue a tenant-owned verifiers evaluation
+- `POST /internal/rl/train` — launch a digest-pinned Prime-RL RunPod Pod
+- `GET /internal/rl/runs/{run_id}` — verify and return run artifacts
+- `POST /internal/rl/runs/{run_id}/cancel` — cancel a run and terminate its Pod
 - `POST /internal/competence/fit` — submit a tenant/project-bound competence fit
 - `POST /internal/competence/refit` — submit a refit bound to a previous scorer
 - `GET /internal/competence/jobs/{job_id}` — inspect fit/refit state and artifacts
@@ -163,6 +175,26 @@ never submit a `tenant_id`. Grant only the scopes required by the caller:
 
 `offload:*` grants all three offload scopes. Revoked, expired, inactive-tenant,
 or unknown keys are refused; job lookups are filtered to the admitted tenant.
+
+### Reinforcement-learning machine-key admission
+
+RL routes use `rl:eval`, `rl:train`, `rl:read`, and `rl:cancel`; `rl:*`
+grants all four. Tenant identity comes only from the verified machine key. A
+nested `tenant` or `tenant_id` is treated as an equality assertion and
+refused if it does not match.
+
+Run submission is idempotent by tenant and `operation_id`; reusing an
+operation ID with a changed taskset, config digest, image digest, or operation
+fails closed. Training accepts only an OCI image reference with a full SHA-256
+digest. The worker gives the Pod tenant/run-scoped presigned upload
+capabilities, ingests the resulting traces into Arrow, verifies digest, schema,
+and row count on readback, and only then mints `Trajectory` and
+`GraderVerdict` rows. Status reads repeat artifact verification before
+issuing download URLs.
+
+The committed tests use a byte-preserving storage double and mocked RunPod REST
+transport. They prove control-flow and integrity behavior but do not substitute
+for a live Pod, hosted object storage, or a real Prime-RL reward curve.
 
 ### Extraction machine-key admission
 

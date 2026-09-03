@@ -227,6 +227,72 @@ class ArtifactStore:
         digest = self._content_digest(payload_digest)
         return f"{self.tenant_prefix(tenant_id)}renders/{digest}.{extension}"
 
+    def rl_artifact_key(
+        self,
+        tenant_id: UUID,
+        run_id: UUID,
+        artifact_name: str,
+        payload_digest: str,
+    ) -> str:
+        allowed = set("abcdefghijklmnopqrstuvwxyz0123456789-_.")
+        if (
+            not artifact_name
+            or len(artifact_name) > 128
+            or any(character not in allowed for character in artifact_name)
+        ):
+            raise ArtifactValidationError("RL artifact name is malformed")
+        digest = self._content_digest(payload_digest)
+        return f"{self.tenant_prefix(tenant_id)}rl/{run_id}/{artifact_name}/{digest}"
+
+    def write_rl_content(
+        self,
+        tenant_id: UUID,
+        run_id: UUID,
+        artifact_name: str,
+        payload: bytes,
+        *,
+        media_type: str,
+    ) -> StoredContentArtifact:
+        allowed_types = {
+            "application/json",
+            "application/jsonl",
+            "text/csv",
+            "text/plain",
+            "application/toml",
+        }
+        if media_type not in allowed_types:
+            raise ArtifactValidationError("RL artifact media type is not allowed")
+        if not payload or len(payload) > self.max_bytes:
+            raise ArtifactValidationError(
+                "RL artifact must be non-empty and within ARTIFACT_MAX_BYTES"
+            )
+        payload_digest = sha256_digest(payload)
+        key = self.rl_artifact_key(
+            tenant_id,
+            run_id,
+            artifact_name,
+            payload_digest,
+        )
+        self._storage_call(
+            "write RL artifact",
+            lambda: self.client.put_object(
+                Bucket=self.bucket,
+                Key=key,
+                Body=payload,
+                ContentType=media_type,
+            ),
+        )
+        if sha256_digest(self.get_bytes(tenant_id, key)) != payload_digest:
+            raise ArtifactValidationError(
+                "RL artifact readback does not match published digest"
+            )
+        return StoredContentArtifact(
+            artifact_key=key,
+            payload_digest=payload_digest,
+            media_type=media_type,
+            byte_length=len(payload),
+        )
+
     def write_render_artifact(
         self, tenant_id: UUID, payload: bytes, *, media_type: str
     ) -> StoredContentArtifact:
@@ -368,7 +434,28 @@ class ArtifactStore:
         )
 
     def presign_put(self, tenant_id: UUID, artifact_key: str) -> str:
+        return self.presign_put_content(
+            tenant_id,
+            artifact_key,
+            content_type=ARROW_IPC_CONTENT_TYPE,
+        )
+
+    def presign_put_content(
+        self,
+        tenant_id: UUID,
+        artifact_key: str,
+        *,
+        content_type: str,
+    ) -> str:
         key = self.validate_key(tenant_id, artifact_key)
+        if content_type not in {
+            ARROW_IPC_CONTENT_TYPE,
+            "application/json",
+            "application/jsonl",
+            "text/csv",
+            "text/plain",
+        }:
+            raise ArtifactValidationError("artifact upload content type is not allowed")
         return self._storage_call(
             "presign PUT",
             lambda: self.client.generate_presigned_url(
@@ -376,7 +463,7 @@ class ArtifactStore:
                 Params={
                     "Bucket": self.bucket,
                     "Key": key,
-                    "ContentType": ARROW_IPC_CONTENT_TYPE,
+                    "ContentType": content_type,
                 },
                 ExpiresIn=self.presign_seconds,
                 HttpMethod="PUT",
