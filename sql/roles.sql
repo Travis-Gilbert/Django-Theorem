@@ -72,6 +72,10 @@ GRANT SELECT (
   merge_target_claim_id, reason, reviewer, created_at
 ) ON control.control_extractionreview TO theorem_spine;
 
+GRANT SELECT (
+  id, tenant_id, taskset_ref, status, config_digest
+) ON control.control_trainingrun TO theorem_spine;
+
 -- Explicitly no write on control for spine
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON ALL TABLES IN SCHEMA control FROM theorem_spine;
 

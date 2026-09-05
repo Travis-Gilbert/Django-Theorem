@@ -29,6 +29,11 @@ EXTRACTION_SUBMIT_SCOPE = "extraction:submit"
 EXTRACTION_READ_SCOPE = "extraction:read"
 EXTRACTION_REVIEW_SCOPE = "extraction:review"
 EXTRACTION_WILDCARD_SCOPE = "extraction:*"
+RL_EVAL_SCOPE = "rl:eval"
+RL_TRAIN_SCOPE = "rl:train"
+RL_READ_SCOPE = "rl:read"
+RL_CANCEL_SCOPE = "rl:cancel"
+RL_WILDCARD_SCOPE = "rl:*"
 
 
 @dataclass(frozen=True)

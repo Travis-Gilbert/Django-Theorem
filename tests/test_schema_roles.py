@@ -112,6 +112,13 @@ def test_d3_columns_present():
             "reviewer",
             "created_at",
         },
+        "control_trainingrun": {
+            "id",
+            "tenant_id",
+            "taskset_ref",
+            "status",
+            "config_digest",
+        },
     }
     with connection.cursor() as cursor:
         for table, cols in expected.items():
@@ -205,9 +212,13 @@ def test_theorem_spine_can_select_control_tenant():
             "id, tenant_id, job_id, candidate_digest, candidate_digest_version, "
             "claim_id, decision, merge_target_claim_id, reason, reviewer, created_at",
         ),
+        (
+            "control_trainingrun",
+            "id, tenant_id, taskset_ref, status, config_digest",
+        ),
     ],
 )
-def test_theorem_spine_can_select_extraction_read_models(table, columns):
+def test_theorem_spine_can_select_extended_read_models(table, columns):
     ok, reason = _roles_applied()
     if not ok:
         pytest.skip(reason)

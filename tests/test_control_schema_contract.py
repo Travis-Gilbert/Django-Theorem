@@ -34,6 +34,11 @@ CONTROL_SCHEMA_CONTRACT: list[tuple[str, str]] = [
     ("control_apikey", "scopes"),
     ("control_apikey", "revoked_at"),
     ("control_apikey", "expires_at"),
+    ("control_trainingrun", "id"),
+    ("control_trainingrun", "tenant_id"),
+    ("control_trainingrun", "taskset_ref"),
+    ("control_trainingrun", "status"),
+    ("control_trainingrun", "config_digest"),
 ]
 
 
@@ -60,7 +65,7 @@ def _column_names(model: type) -> set[str]:
 
 
 def test_control_schema_contract_column_count():
-    assert len(CONTROL_SCHEMA_CONTRACT) == 18
+    assert len(CONTROL_SCHEMA_CONTRACT) == 23
 
 
 def test_control_schema_contract_models_declare_required_columns():

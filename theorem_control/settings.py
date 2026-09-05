@@ -39,6 +39,7 @@ INSTALLED_APPS = [
     "apps.layout",
     "apps.rendering",
     "apps.extraction",
+    "theorem_control.rl",
 ]
 
 MIDDLEWARE = [
@@ -133,6 +134,15 @@ RUNPOD_POLL_INTERVAL_SECONDS = env.float("RUNPOD_POLL_INTERVAL_SECONDS", default
 RUNPOD_WORKER_IMAGE_DIGEST = env("RUNPOD_WORKER_IMAGE_DIGEST", default="")
 RUNPOD_EXTRACTION_ENDPOINT_ID = env("RUNPOD_EXTRACTION_ENDPOINT_ID", default="")
 RUNPOD_EXTRACTION_IMAGE_DIGEST = env("RUNPOD_EXTRACTION_IMAGE_DIGEST", default="")
+RUNPOD_PODS_API_BASE = env("RUNPOD_PODS_API_BASE", default="https://rest.runpod.io/v1")
+RL_RUNPOD_IMAGE_DIGEST = env("RL_RUNPOD_IMAGE_DIGEST", default="")
+RL_RUNPOD_GPU_TYPE = env("RL_RUNPOD_GPU_TYPE", default="NVIDIA GeForce RTX 4090")
+RL_RUNPOD_CLOUD_TYPE = env("RL_RUNPOD_CLOUD_TYPE", default="SECURE")
+RL_RUNPOD_POLL_INTERVAL_SECONDS = env.float(
+    "RL_RUNPOD_POLL_INTERVAL_SECONDS", default=15.0
+)
+RL_RUNPOD_DEADLINE_SECONDS = env.int("RL_RUNPOD_DEADLINE_SECONDS", default=6 * 60 * 60)
+RL_EVAL_DEADLINE_SECONDS = env.int("RL_EVAL_DEADLINE_SECONDS", default=2 * 60 * 60)
 OFFLOAD_EXECUTION_MODE = env("OFFLOAD_EXECUTION_MODE", default="stub").strip().lower()
 R_OFFLOAD_EXECUTION_MODE = (
     env("R_OFFLOAD_EXECUTION_MODE", default="stub").strip().lower()
@@ -194,6 +204,8 @@ CELERY_TASK_EAGER_PROPAGATES = True
 CELERY_TASK_ROUTES = {
     "apps.orchestration.tasks.run_r_*": {"queue": "offload.r"},
     "apps.orchestration.tasks.run_offload_r": {"queue": "offload.r"},
+    "theorem_control.rl.tasks.run_eval": {"queue": "rl"},
+    "theorem_control.rl.tasks.run_prime_rl_training": {"queue": "rl"},
 }
 CELERY_TASK_DEFAULT_QUEUE = "celery"
 COMPETENCE_STALE_AFTER_SECONDS = env.int(
