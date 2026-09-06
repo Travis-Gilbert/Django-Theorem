@@ -17,6 +17,7 @@ from django.utils import timezone
 from apps.orchestration.artifacts import ArtifactStore
 from apps.orchestration.models import Job
 from apps.tenancy.models import Tenant
+from theorem_ml.executors.registry import observe_execution
 from theorem_ml.extract.claims.decompose import Claim, Decomposer
 from theorem_ml.extract.claims.verify import ClaimVerifier
 from theorem_ml.extract.elements import DocElementTree
@@ -26,7 +27,6 @@ from theorem_ml.extract.resolve import resolve_mentions
 from theorem_ml.extract.spans.gliner2 import SpanExtractor
 from theorem_ml.extract.spans.labels import SchemaClient
 from theorem_ml.extract.temporal import source_time, temporal_properties
-from theorem_ml.executors.registry import observe_execution
 
 from ..models import Artifact, ExtractionRun
 
@@ -227,7 +227,8 @@ class AdmissionPipeline:
         with self._observe(run, state, 'claims.verify.minicheck',
                            {'document': state['document'], 'claims': state['claims'], 'cutoff': cutoff}, verifier):
             verified = verifier.verify(DocElementTree.from_dict(state['document']), [_claim(c) for c in state['claims']])
-        state['claims'] = [{**old, **new.to_dict()} for old, new in zip(state['claims'], verified)]
+            state['claims'] = [{**old, **new.to_dict()}
+                               for old, new in zip(state['claims'], verified, strict=True)]
 
     def _distill(self, run, state):
         tree = DocElementTree.from_dict(state['document'])

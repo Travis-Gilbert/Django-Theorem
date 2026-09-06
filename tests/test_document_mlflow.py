@@ -4,7 +4,11 @@ from dataclasses import replace
 import pytest
 from mlflow import MlflowClient
 
-from apps.extraction.services.capture_admission import AdmissionPipeline, capture, schedule
+from apps.extraction.services.capture_admission import (
+    AdmissionPipeline,
+    capture,
+    schedule,
+)
 from apps.tenancy.models import Tenant
 from theorem_ml.extract.claims.decompose import Claim, Decomposition
 from theorem_ml.extract.elements import DocElement, build_tree
@@ -83,6 +87,46 @@ def test_pipeline_persists_only_executed_stage_run_ids(tmp_path, monkeypatch):
     pipeline.execute(run.id)
     run.refresh_from_db()
     assert run.output["executor_runs"] == refs
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("result_count", [0, 2])
+def test_verifier_count_mismatch_fails_observation_before_publication(tmp_path, monkeypatch, result_count):
+    uri = "sqlite:///" + str(tmp_path / "mlflow.db")
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", uri)
+    tenant = Tenant.objects.create(slug="malformed-verifier-fixture", display_name="Fixture")
+
+    class FixturePublicationGuard(FixtureSchema):
+        def call(self, tenant, action, **kwargs):
+            assert action != "publish", "Malformed verifier output must never reach publication"
+            return super().call(tenant, action, **kwargs)
+
+    class FixtureWrongCountVerifier(FixtureVerifier):
+        def verify(self, tree, claims):
+            assert len(claims) == 1
+            return [replace(claims[0], verified=True, score=.9)] * result_count
+
+    schema = FixturePublicationGuard()
+    spans = SpanExtractor(schema)
+    spans._model = FixtureGlinerModel()
+    spans.evidence_class = "fixture_execution"
+    pipeline = AdmissionPipeline(schema=schema, spans=spans, decomposer=FixtureDecomposer(),
+        verifier=FixtureWrongCountVerifier(), scorer=lambda state, tenant: {"status": "fixture_only", "score": None})
+    artifact, _ = capture(tenant, text="Ada signed.")
+    run, _ = schedule(artifact, ["Lease"])
+    with pytest.raises(ValueError, match="zip"):
+        pipeline.execute(run.id)
+    run.refresh_from_db()
+    artifact.refresh_from_db()
+    assert run.status == run.orchestration_job.status == artifact.ingestion_status == "failed"
+    assert run.stage_history[-1]["stage"] == "Challenge"
+    assert len(run.output["claims"]) == 1
+    assert not run.output["claims"][0]["verified"]
+    assert "publication" not in run.output
+    ref = run.output["executor_runs"][-1]
+    assert ref["name"] == "claims.verify.minicheck"
+    assert ref["status"] == "FAILED"
+    assert MlflowClient(tracking_uri=uri).get_run(ref["mlflow_run_id"]).info.status == "FAILED"
 
 
 def test_parser_observes_paddle_image_and_skips_native_code(tmp_path):
