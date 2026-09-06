@@ -22,9 +22,18 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest", "pytest-django"]
+index = ["numpy>=1.26", "networkx==3.6.1", "mlflow-skinny>=3.1,<4"]
+index-corpus = ["theorem-control-plane[index]", "tabicl @ git+https://github.com/soda-inria/tabicl.git@0dbff3ec8fc68c123c87af77b0ea8b25cd2d23f3"]
 
 [tool.django]
 settings_module = "theorem_control.settings"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["apps*", "bridges*", "theorem_control*", "theorem_ml*"]
 
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "theorem_control.settings"
