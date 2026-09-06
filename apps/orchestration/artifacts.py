@@ -258,6 +258,16 @@ class ArtifactStore:
             "application/jsonl",
             "text/csv",
             "text/plain",
+            "application/pdf",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "text/html",
+            "message/rfc822",
+            "image/png",
+            "image/jpeg",
+            "image/tiff",
+            "image/webp",
             "application/toml",
         }
         if media_type not in allowed_types:

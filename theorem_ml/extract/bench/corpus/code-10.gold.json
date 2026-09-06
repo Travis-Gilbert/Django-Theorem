@@ -1,0 +1,60 @@
+{
+  "texts": [
+    "Lease record LEASE-09-010",
+    "reference: LEASE-09-010",
+    "person: Robin Wells",
+    "amount: 2565",
+    "deadline: 2026-01-15",
+    "Robin Wells approved the lease."
+  ],
+  "tables": [],
+  "merged_cells": [],
+  "headings": [
+    [
+      "Lease record LEASE-09-010",
+      1
+    ]
+  ],
+  "fields": {
+    "reference": {
+      "class": "exact",
+      "value": "LEASE-09-010"
+    },
+    "person": {
+      "class": "semantic",
+      "value": "Robin Wells",
+      "aliases": []
+    },
+    "amount": {
+      "class": "tolerance",
+      "value": 2565,
+      "tolerance": 0.01
+    },
+    "deadline": {
+      "class": "exact",
+      "value": "2026-01-15"
+    }
+  },
+  "spans": {
+    "person": []
+  },
+  "relations": [
+    [
+      "Robin Wells",
+      "approved",
+      "lease"
+    ]
+  ],
+  "claims": [
+    {
+      "text": "Robin Wells approved the lease.",
+      "quote": "Robin Wells approved the lease.",
+      "supported": true
+    },
+    {
+      "text": "Robin Wells rejected the lease.",
+      "quote": "Robin Wells approved the lease.",
+      "supported": false
+    }
+  ]
+}

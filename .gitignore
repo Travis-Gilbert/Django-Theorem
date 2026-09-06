@@ -19,3 +19,5 @@ staticfiles/
 media/
 celerybeat-schedule
 *.log
+/var/
+/mlruns/

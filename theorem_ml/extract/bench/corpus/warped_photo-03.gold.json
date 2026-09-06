@@ -1,0 +1,63 @@
+{
+  "texts": [
+    "Lease record LEASE-03-003",
+    "reference: LEASE-03-003",
+    "person: Casey Rivera",
+    "amount: 1570",
+    "deadline: 2026-03-15",
+    "Casey Rivera approved the lease."
+  ],
+  "tables": [],
+  "merged_cells": [],
+  "headings": [
+    [
+      "Lease record LEASE-03-003",
+      1
+    ]
+  ],
+  "fields": {
+    "reference": {
+      "class": "exact",
+      "value": "LEASE-03-003"
+    },
+    "person": {
+      "class": "semantic",
+      "value": "Casey Rivera",
+      "aliases": []
+    },
+    "amount": {
+      "class": "tolerance",
+      "value": 1570,
+      "tolerance": 0.01
+    },
+    "deadline": {
+      "class": "exact",
+      "value": "2026-03-15"
+    }
+  },
+  "spans": {
+    "person": [
+      "Casey Rivera",
+      "Casey Rivera"
+    ]
+  },
+  "relations": [
+    [
+      "Casey Rivera",
+      "approved",
+      "lease"
+    ]
+  ],
+  "claims": [
+    {
+      "text": "Casey Rivera approved the lease.",
+      "quote": "Casey Rivera approved the lease.",
+      "supported": true
+    },
+    {
+      "text": "Casey Rivera rejected the lease.",
+      "quote": "Casey Rivera approved the lease.",
+      "supported": false
+    }
+  ]
+}

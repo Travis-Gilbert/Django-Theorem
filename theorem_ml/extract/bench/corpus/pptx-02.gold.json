@@ -1,0 +1,63 @@
+{
+  "texts": [
+    "Lease record LEASE-08-002",
+    "reference: LEASE-08-002",
+    "person: Jordan Lee",
+    "amount: 2160",
+    "deadline: 2026-02-15",
+    "Jordan Lee approved the lease."
+  ],
+  "tables": [],
+  "merged_cells": [],
+  "headings": [
+    [
+      "Lease record LEASE-08-002",
+      1
+    ]
+  ],
+  "fields": {
+    "reference": {
+      "class": "exact",
+      "value": "LEASE-08-002"
+    },
+    "person": {
+      "class": "semantic",
+      "value": "Jordan Lee",
+      "aliases": []
+    },
+    "amount": {
+      "class": "tolerance",
+      "value": 2160,
+      "tolerance": 0.01
+    },
+    "deadline": {
+      "class": "exact",
+      "value": "2026-02-15"
+    }
+  },
+  "spans": {
+    "person": [
+      "Jordan Lee",
+      "Jordan Lee"
+    ]
+  },
+  "relations": [
+    [
+      "Jordan Lee",
+      "approved",
+      "lease"
+    ]
+  ],
+  "claims": [
+    {
+      "text": "Jordan Lee approved the lease.",
+      "quote": "Jordan Lee approved the lease.",
+      "supported": true
+    },
+    {
+      "text": "Jordan Lee rejected the lease.",
+      "quote": "Jordan Lee approved the lease.",
+      "supported": false
+    }
+  ]
+}

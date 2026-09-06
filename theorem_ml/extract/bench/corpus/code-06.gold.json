@@ -1,0 +1,60 @@
+{
+  "texts": [
+    "Lease record LEASE-09-006",
+    "reference: LEASE-09-006",
+    "person: Riley Brooks",
+    "amount: 2425",
+    "deadline: 2026-06-15",
+    "Riley Brooks approved the lease."
+  ],
+  "tables": [],
+  "merged_cells": [],
+  "headings": [
+    [
+      "Lease record LEASE-09-006",
+      1
+    ]
+  ],
+  "fields": {
+    "reference": {
+      "class": "exact",
+      "value": "LEASE-09-006"
+    },
+    "person": {
+      "class": "semantic",
+      "value": "Riley Brooks",
+      "aliases": []
+    },
+    "amount": {
+      "class": "tolerance",
+      "value": 2425,
+      "tolerance": 0.01
+    },
+    "deadline": {
+      "class": "exact",
+      "value": "2026-06-15"
+    }
+  },
+  "spans": {
+    "person": []
+  },
+  "relations": [
+    [
+      "Riley Brooks",
+      "approved",
+      "lease"
+    ]
+  ],
+  "claims": [
+    {
+      "text": "Riley Brooks approved the lease.",
+      "quote": "Riley Brooks approved the lease.",
+      "supported": true
+    },
+    {
+      "text": "Riley Brooks rejected the lease.",
+      "quote": "Riley Brooks approved the lease.",
+      "supported": false
+    }
+  ]
+}

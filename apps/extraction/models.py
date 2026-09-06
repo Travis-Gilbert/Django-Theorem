@@ -199,3 +199,70 @@ def latest_reviews_since(
     for review in queryset:
         latest.setdefault(review.candidate_digest, review)
     return sorted(latest.values(), key=lambda review: review.created_at)
+
+
+class Artifact(models.Model):
+    """Tenant-owned captured source; parsed/derived bodies never replace input."""
+    class CaptureKind(models.TextChoices):
+        TEXT = 'text', 'Text'
+        FILE = 'file', 'File'
+        URL = 'url', 'URL'
+
+    class IngestionStatus(models.TextChoices):
+        CAPTURED = 'captured', 'Captured'
+        PARSED = 'parsed', 'Parsed'
+        EXTRACTED = 'extracted', 'Extracted'
+        FAILED = 'failed', 'Failed'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='captured_artifacts')
+    capture_kind = models.CharField(max_length=8, choices=CaptureKind.choices)
+    title = models.CharField(max_length=512, blank=True)
+    source_text = models.TextField(blank=True)
+    artifact_key = models.CharField(max_length=512, blank=True)
+    source_url = models.URLField(max_length=2048, blank=True)
+    source_sha256 = models.CharField(max_length=64)
+    filename = models.CharField(max_length=512, blank=True)
+    media_type = models.CharField(max_length=128, blank=True)
+    metadata = models.JSONField(default=dict)
+    ingestion_status = models.CharField(max_length=16, choices=IngestionStatus.choices,
+                                       default=IngestionStatus.CAPTURED)
+    parsed_tree = models.JSONField(default=dict)
+    layers = models.JSONField(default=dict)
+    captured_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'control_capture_artifact'
+        constraints = [models.UniqueConstraint(fields=['tenant', 'source_sha256'],
+                                                name='control_capture_tenant_digest_uniq')]
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            original = type(self).objects.filter(pk=self.pk).values(
+                'tenant_id', 'capture_kind', 'source_text', 'artifact_key', 'source_url',
+                'source_sha256', 'filename', 'media_type', 'metadata').first()
+            if original and any(getattr(self, key) != value for key, value in original.items()):
+                raise ValidationError('captured source identity and bytes are immutable')
+        return super().save(*args, **kwargs)
+
+
+class ExtractionRun(models.Model):
+    """One persisted execution, including each of the eight ordered stage entries."""
+    class Kind(models.TextChoices):
+        ADMISSION = 'admission', 'Admission'
+        CLAIM_ESCALATION = 'claim_escalation', 'Claim escalation'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    artifact = models.ForeignKey(Artifact, on_delete=models.CASCADE, related_name='extraction_runs')
+    orchestration_job = models.OneToOneField(OrchestrationJob, on_delete=models.PROTECT,
+                                            related_name='document_extraction_run')
+    kind = models.CharField(max_length=24, choices=Kind.choices, default=Kind.ADMISSION)
+    status = models.CharField(max_length=32, default='queued')
+    object_types = models.JSONField(default=list)
+    stage_history = models.JSONField(default=list)
+    parser_receipt = models.JSONField(default=dict)
+    output = models.JSONField(default=dict)
+    ambiguity = models.JSONField(default=list)
+    error = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)

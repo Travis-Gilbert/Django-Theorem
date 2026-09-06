@@ -1,0 +1,14 @@
+{
+  "renderer": "LibreOffice",
+  "version": "LibreOffice 26.8.0.3 bce0998afefdbc355585ca324285661a2170ba77",
+  "filter": "writer_pdf_Export",
+  "source": "docx-01.docx",
+  "source_sha256": "03e214a484d65472aa44ad54d692b6480ce8cb89916f08fe5fb880b365b99fa8",
+  "comparison_pdf": "docx-01.pdf",
+  "comparison_pdf_sha256": "e49a0aa277f282caa1cdce80edda9dc8926572353e11957b659efcb5a6463b3d",
+  "page_image": "docx-01.png",
+  "page_image_sha256": "fd804222b2da2c394fdc1a517db07f1ffd56eb8ae45c6bca0e64ba93026f5807",
+  "page_count": 1,
+  "image_renderer": "pypdfium2",
+  "image_scale": 1.5
+}

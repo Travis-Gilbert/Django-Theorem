@@ -1,0 +1,4 @@
+theorem_ml/extract/bench/corpus/*.pdf binary
+theorem_ml/extract/bench/corpus/*.png binary
+theorem_ml/extract/bench/corpus/*.docx binary
+theorem_ml/extract/bench/corpus/*.pptx binary

@@ -1,0 +1,63 @@
+{
+  "texts": [
+    "Lease record LEASE-02-001",
+    "reference: LEASE-02-001",
+    "person: Avery Morgan",
+    "amount: 1375",
+    "deadline: 2026-01-15",
+    "Avery Morgan approved the lease."
+  ],
+  "tables": [],
+  "merged_cells": [],
+  "headings": [
+    [
+      "Lease record LEASE-02-001",
+      1
+    ]
+  ],
+  "fields": {
+    "reference": {
+      "class": "exact",
+      "value": "LEASE-02-001"
+    },
+    "person": {
+      "class": "semantic",
+      "value": "Avery Morgan",
+      "aliases": []
+    },
+    "amount": {
+      "class": "tolerance",
+      "value": 1375,
+      "tolerance": 0.01
+    },
+    "deadline": {
+      "class": "exact",
+      "value": "2026-01-15"
+    }
+  },
+  "spans": {
+    "person": [
+      "Avery Morgan",
+      "Avery Morgan"
+    ]
+  },
+  "relations": [
+    [
+      "Avery Morgan",
+      "approved",
+      "lease"
+    ]
+  ],
+  "claims": [
+    {
+      "text": "Avery Morgan approved the lease.",
+      "quote": "Avery Morgan approved the lease.",
+      "supported": true
+    },
+    {
+      "text": "Avery Morgan rejected the lease.",
+      "quote": "Avery Morgan approved the lease.",
+      "supported": false
+    }
+  ]
+}
