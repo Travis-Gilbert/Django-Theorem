@@ -106,3 +106,11 @@ both with and without held-out labels. The no-held-out cases verify real
 prototype output and actual unmeasured MLflow tags, not a classifier substitute.
 The canonical 784-item gate remains the sole skip. Output is retained in
 `~/.cache/theorem-index-w10/executors-resume-tests.log`.
+
+An exact singleton branch was then added for the one-accepted-target case:
+normalized centroid, prior 1, `exact_singleton_centroid` implementation,
+unmeasured fitness and no TabICL/checkpoint claim. Its numerical and real MLflow
+test runs without checkpoint configuration. The combined gate after that
+change passed **15 tests with 1 skip in 63.11 seconds**, including the four
+actual multiclass model cases. Output:
+`~/.cache/theorem-index-w10/executors-singleton-tests.log`.

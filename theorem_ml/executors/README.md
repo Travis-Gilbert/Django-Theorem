@@ -65,6 +65,17 @@ held-out evaluation or invent truth labels to obtain a metric. The Rust corpus
 projection neutralizes candidate-specific affinity/membrane slots so a known
 destination cannot leak into classifier input.
 
+With exactly one admitted target, the executor returns its exact normalized
+centroid with prior 1 under implementation `exact_singleton_centroid`. This
+branch does not construct TabICL or require its checkpoint. Fitness remains
+unmeasured and no model provenance is emitted. It is exact one-target algebra,
+separate from evidence for the learned multiclass path.
+
+The Rust bridge includes all admitted existing filed rows and their collections
+alongside accepted proposal members in corpus context. Prototype updates may
+therefore refresh existing collections. Filing the newly imported batch still
+uses only the proposal targets explicitly accepted for that batch.
+
 Corpus output has `updates: [{collection, prototype, prior}]`, the schema anchor,
 held-out fitness and MLflow linkage. Apply the complete update vector through
 Rust `T1Head::seed_prototypes` once per pass. Neither executor writes item

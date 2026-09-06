@@ -142,6 +142,19 @@ def corpus_pass(payload: dict, *, tenant: str) -> dict:
         raise ValueError("corpus and held-out items require filed collection IDs")
     if not set(truth) <= set(labels):
         raise ValueError("held-out collection is absent from the fitting context")
+    classes = np.unique(labels)
+    if len(classes) == 1:
+        # No classification uncertainty exists with one accepted target. This
+        # is exact centroid algebra, not a TabICL invocation or quality oracle.
+        return {
+            "updates": prototype_updates(
+                features, np.ones((len(items), 1)), classes, offset, dim
+            ),
+            "schema_anchor": payload["feature_layout"]["schema_anchor"],
+            "fitness": None,
+            "context_count": len(items),
+            "implementation": "exact_singleton_centroid",
+        }
     model_path = os.environ.get("THEOREM_TABICL_CHECKPOINT", "")
     if not model_path or not os.path.isfile(model_path):
         raise RuntimeError(

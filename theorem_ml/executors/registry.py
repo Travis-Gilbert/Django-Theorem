@@ -72,7 +72,11 @@ def execute(
             client.log_metric(run_id, "held_out_count", fitness["held_out_count"])
         else:
             client.set_tag(
-                run_id, "theorem.fitness_status", "not_measured_no_held_out_filings"
+                run_id,
+                "theorem.fitness_status",
+                "not_measured_exact_singleton"
+                if result["implementation"] == "exact_singleton_centroid"
+                else "not_measured_no_held_out_filings",
             )
         client.log_param(run_id, "implementation", result["implementation"])
         client.log_param(run_id, "output_digest", digest(result))

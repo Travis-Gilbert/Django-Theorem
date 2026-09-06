@@ -25,6 +25,57 @@ def test_corpus_probability_weighted_prototypes_and_priors():
         prototype_updates(features, [[1, 1], [1, 1]], ["a", "b"], 1, 2)
 
 
+def test_corpus_singleton_uses_exact_centroid_without_claiming_tabicl(
+    tmp_path, monkeypatch
+):
+    from .registry import execute
+    from mlflow import MlflowClient
+
+    monkeypatch.delenv("THEOREM_TABICL_CHECKPOINT", raising=False)
+    monkeypatch.setenv("MLFLOW_ALLOW_FILE_STORE", "true")
+    payload = {
+        "items": [
+            {
+                "id": "a",
+                "tenant_id": "singleton",
+                "collection": "only",
+                "features": [1, 0],
+            },
+            {
+                "id": "b",
+                "tenant_id": "singleton",
+                "collection": "only",
+                "features": [0, 1],
+            },
+        ],
+        "feature_layout": {
+            "object_type": "schema:object-type:singleton:item",
+            "schema_anchor": "exact-math",
+            "feature_dim": 2,
+            "blocks": [
+                {
+                    "field": "embedding",
+                    "offset": 0,
+                    "kind": {"kind": "embedding", "dim": 2},
+                }
+            ],
+        },
+    }
+    result = execute(
+        "corpus_filing", payload, tenant="singleton", tracking_uri=tmp_path.as_uri()
+    )
+    assert result["implementation"] == "exact_singleton_centroid"
+    assert result["updates"][0]["prior"] == 1.0
+    assert result["updates"][0]["prototype"] == pytest.approx([2**-0.5, 2**-0.5])
+    assert result["fitness"] is None
+    assert "checkpoint" not in result and "source_commit" not in result
+    run = MlflowClient(tracking_uri=tmp_path.as_uri()).get_run(
+        result["executor"]["mlflow_run_id"]
+    )
+    assert run.data.tags["theorem.fitness_status"] == "not_measured_exact_singleton"
+    assert "held_out_filing_accuracy" not in run.data.metrics
+
+
 class RecordingBinaryEstimator:
     """Test double for wrapper call topology, never a model-quality oracle."""
 
