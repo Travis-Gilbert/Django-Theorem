@@ -131,7 +131,10 @@ def test_corpus_real_784_discovery_tabicl_and_online_head_oracle():
 
 
 @pytest.mark.parametrize("class_count", [2, 11])
-def test_corpus_real_tabicl_cached_smoke(class_count, tmp_path, monkeypatch):
+@pytest.mark.parametrize("with_held_out", [True, False])
+def test_corpus_real_tabicl_cached_smoke(
+    class_count, with_held_out, tmp_path, monkeypatch
+):
     if os.environ.get("THEOREM_INDEX_RUN_TABICL_SMOKE") != "1":
         pytest.skip(
             "set THEOREM_INDEX_RUN_TABICL_SMOKE=1 for real model runtime proof on synthetic data"
@@ -157,7 +160,7 @@ def test_corpus_real_tabicl_cached_smoke(class_count, tmp_path, monkeypatch):
 
     payload = {
         "items": rows("context-", max(300, class_count * 30)),
-        "held_out": rows("held-", class_count * 4),
+        "held_out": rows("held-", class_count * 4) if with_held_out else [],
         "feature_layout": {
             "object_type": "schema:object-type:runtime-smoke:item",
             "schema_anchor": "explicit-synthetic-runtime-smoke",
@@ -181,4 +184,17 @@ def test_corpus_real_tabicl_cached_smoke(class_count, tmp_path, monkeypatch):
     assert result["implementation"] == (
         "tabiclv2_cached_native" if class_count <= 10 else "tabiclv2_cached_one_vs_rest"
     )
-    assert result["fitness"]["accuracy"] >= 0.9
+    if with_held_out:
+        assert result["fitness"]["accuracy"] >= 0.9
+    else:
+        assert result["fitness"] is None
+        from mlflow import MlflowClient
+
+        run = MlflowClient(tracking_uri=tmp_path.as_uri()).get_run(
+            result["executor"]["mlflow_run_id"]
+        )
+        assert (
+            run.data.tags["theorem.fitness_status"]
+            == "not_measured_no_held_out_filings"
+        )
+        assert "held_out_filing_accuracy" not in run.data.metrics

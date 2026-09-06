@@ -50,12 +50,20 @@ The output contains `proposals` with `proposal_id`, `name`, `members`,
 MLflow run linkage. The Rust caller persists these nodes and owns
 accept/rename/dismiss. A returned proposal is not an accepted collection.
 
-Corpus input has `items`, disjoint `held_out`, and `feature_layout`. Every row
+Corpus input has `items`, optional disjoint `held_out`, and `feature_layout`. Every row
 contains `id`, `tenant_id`, `collection`, and `features` in the Rust-derived
 layout's exact coordinates. Layout wire JSON is the serialized Rust
 `FeatureLayout`: `object_type`, `schema_anchor`, `feature_dim`, and contiguous
 `blocks` with `field`, `offset`, and tagged `kind`. Exactly one nonempty embedding
 block provides the prototype dimensions.
+
+Cold-start contexts may contain accepted proposal member labels before the Rust
+filing transaction publishes roots. Without independently held-out filings,
+pass an empty `held_out` array: inference still runs, `fitness` is null and the
+MLflow run explicitly records unmeasured fitness. Never copy context rows into
+held-out evaluation or invent truth labels to obtain a metric. The Rust corpus
+projection neutralizes candidate-specific affinity/membrane slots so a known
+destination cannot leak into classifier input.
 
 Corpus output has `updates: [{collection, prototype, prior}]`, the schema anchor,
 held-out fitness and MLflow linkage. Apply the complete update vector through
@@ -114,7 +122,8 @@ discovery rows, the baseline accuracy floor and exactly one generation advance.
 Missing configuration skips this gate explicitly.
 
 The canonical labeled 784-item export corpus was not present in the inspected
-Theorem/Django checkouts or targeted Downloads search. Rust must still connect
-its ingest embedding pipeline, proposal persistence/acceptance and atomic
-prototype application. A local small-model smoke does not discharge those
-requirements or establish hosted deployment.
+Theorem/Django checkouts or targeted Downloads search. The companion Rust
+worktree now implements configured embedding, durable proposal decisions and
+atomic prototype/filing publication; its gates and deployed connectivity remain
+separate evidence. A local small-model smoke does not discharge the real-corpus
+requirement or establish hosted deployment.

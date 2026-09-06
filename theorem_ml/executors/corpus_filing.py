@@ -122,17 +122,19 @@ def prototype_updates(
 
 def corpus_pass(payload: dict, *, tenant: str) -> dict:
     items = admitted_items(payload.get("items", []), tenant)
-    held_out = admitted_items(payload.get("held_out", []), tenant)
+    held_out = (
+        admitted_items(payload["held_out"], tenant) if payload.get("held_out") else []
+    )
     if {item["id"] for item in items} & {item["id"] for item in held_out}:
         raise ValueError("held-out filings must be disjoint from the fitting context")
     features = matrix(items, "features")
-    test_features = matrix(held_out, "features")
+    test_features = matrix(held_out, "features") if held_out else None
     offset, dim = validate_layout(payload.get("feature_layout", {}), features.shape[1])
     if not payload["feature_layout"]["object_type"].startswith(
         f"schema:object-type:{tenant}:"
     ):
         raise ValueError("FeatureLayout object type must belong to the admitted tenant")
-    if test_features.shape[1] != features.shape[1]:
+    if test_features is not None and test_features.shape[1] != features.shape[1]:
         raise ValueError("held-out features do not match FeatureLayout")
     labels = np.asarray([item.get("collection", "") for item in items])
     truth = np.asarray([item.get("collection", "") for item in held_out])
@@ -156,18 +158,21 @@ def corpus_pass(payload: dict, *, tenant: str) -> dict:
     model = CachedTabICLv2(
         model_path=model_path, device=os.environ.get("THEOREM_TABICL_DEVICE", "cpu")
     ).fit(features, labels)
-    held_probabilities = model.predict_proba(test_features)
-    predictions = model.classes_[held_probabilities.argmax(axis=1)]
+    fitness = None
+    if test_features is not None:
+        held_probabilities = model.predict_proba(test_features)
+        predictions = model.classes_[held_probabilities.argmax(axis=1)]
+        fitness = {
+            "accuracy": float(np.mean(predictions == truth)),
+            "held_out_count": len(held_out),
+        }
     updates = prototype_updates(
         features, model.predict_proba(features), model.classes_, offset, dim
     )
     return {
         "updates": updates,
         "schema_anchor": payload["feature_layout"]["schema_anchor"],
-        "fitness": {
-            "accuracy": float(np.mean(predictions == truth)),
-            "held_out_count": len(held_out),
-        },
+        "fitness": fitness,
         "context_count": len(items),
         "implementation": "tabiclv2_cached_native"
         if len(model.classes_) <= 10

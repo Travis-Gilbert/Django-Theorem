@@ -85,9 +85,24 @@ checkpoint and MLflow tracking URI. That gate has **not run**. Its contract
 requires accepted discovery proposals, the measured Tier-1 accuracy floor and
 one Rust prototype-generation advance.
 
-The Rust ingest embedding pipeline, proposal persistence and user acceptance,
-and atomic prototype application are not connected to this Django endpoint in
-this change. Existing normalized imports contain null embeddings; the executor
-refuses missing embeddings rather than manufacturing them. No hosted service
-deployment, mounted VFS behavior, or real-corpus accuracy is established by
-these checks.
+At the initial Django commit, the Rust ingest embedding pipeline, proposal
+persistence and user acceptance, and atomic prototype application were not
+connected to this endpoint. Companion bridge implementation is now present in
+the Rust worktree, with separate Rust gates and deployment proof. The executor
+still refuses missing embeddings rather than manufacturing them. No hosted
+service deployment, mounted VFS behavior, or real-corpus accuracy is established
+by these checks.
+
+## Cold-start contract follow-up
+
+The Rust bridge exposed a legitimate cold-start condition: accepted context
+labels exist but independent held-out truth does not. Empty `held_out` now
+performs the actual corpus pass while returning `fitness: null`; MLflow records
+`not_measured_no_held_out_filings` and no accuracy metric.
+
+The same combined command above was rerun after this change: **14 passed,
+1 skipped in 84.22 seconds**. Actual two-class and eleven-class models each ran
+both with and without held-out labels. The no-held-out cases verify real
+prototype output and actual unmeasured MLflow tags, not a classifier substitute.
+The canonical 784-item gate remains the sole skip. Output is retained in
+`~/.cache/theorem-index-w10/executors-resume-tests.log`.
