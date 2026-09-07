@@ -1,0 +1,63 @@
+{
+  "texts": [
+    "Lease record LEASE-01-007",
+    "reference: LEASE-01-007",
+    "person: Alex Carter",
+    "amount: 1460",
+    "deadline: 2026-07-15",
+    "Alex Carter approved the lease."
+  ],
+  "tables": [],
+  "merged_cells": [],
+  "headings": [
+    [
+      "Lease record LEASE-01-007",
+      1
+    ]
+  ],
+  "fields": {
+    "reference": {
+      "class": "exact",
+      "value": "LEASE-01-007"
+    },
+    "person": {
+      "class": "semantic",
+      "value": "Alex Carter",
+      "aliases": []
+    },
+    "amount": {
+      "class": "tolerance",
+      "value": 1460,
+      "tolerance": 0.01
+    },
+    "deadline": {
+      "class": "exact",
+      "value": "2026-07-15"
+    }
+  },
+  "spans": {
+    "person": [
+      "Alex Carter",
+      "Alex Carter"
+    ]
+  },
+  "relations": [
+    [
+      "Alex Carter",
+      "approved",
+      "lease"
+    ]
+  ],
+  "claims": [
+    {
+      "text": "Alex Carter approved the lease.",
+      "quote": "Alex Carter approved the lease.",
+      "supported": true
+    },
+    {
+      "text": "Alex Carter rejected the lease.",
+      "quote": "Alex Carter approved the lease.",
+      "supported": false
+    }
+  ]
+}

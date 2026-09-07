@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from datetime import timezone as datetime_timezone
+from datetime import UTC
 from typing import Any
 from uuid import UUID
 
@@ -38,8 +38,73 @@ from .reviews import (
 )
 from .tasks import _contract, canonical_hash, submit_extraction
 
-
 router = Router(tags=["extraction"])
+
+
+class CaptureRequest(Schema):
+    text: str = ''
+    artifact_key: str = ''
+    filename: str = ''
+    source_url: str = ''
+    title: str = ''
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class DocumentExtractRequest(Schema):
+    object_types: list[str]
+
+
+@router.post('/artifacts')
+def capture_document(request, body: CaptureRequest):
+    from .services.capture_admission import capture
+    principal = require_machine_key(request, scope=EXTRACTION_SUBMIT_SCOPE)
+    try:
+        artifact, created = capture(principal.tenant, **body.model_dump())
+    except (ValueError, ValidationError) as exc:
+        raise HttpError(400, str(exc)) from exc
+    return {'artifact_id': str(artifact.id), 'source_sha256': artifact.source_sha256,
+            'ingestion_status': artifact.ingestion_status, 'idempotent_replay': not created}
+
+
+@router.post('/artifacts/{artifact_id}/extract')
+def extract_document(request, artifact_id: UUID, body: DocumentExtractRequest):
+    from .models import Artifact
+    from .services.capture_admission import schedule
+    principal = require_machine_key(request, scope=EXTRACTION_SUBMIT_SCOPE)
+    artifact = get_object_or_404(Artifact, pk=artifact_id, tenant=principal.tenant)
+    try:
+        run, created = schedule(artifact, body.object_types)
+    except ValueError as exc:
+        raise HttpError(400, str(exc)) from exc
+    return {'run_id': str(run.id), 'status': run.status, 'idempotent_replay': not created}
+
+
+@router.get('/artifacts/{artifact_id}/read')
+def read_document(request, artifact_id: UUID, element_id: str, tier: str = 'summary'):
+    from theorem_ml.extract.layers import DisclosureTier
+    from theorem_ml.extract.spans.labels import SchemaClient
+
+    from .models import Artifact
+    principal = require_machine_key(request, scope=EXTRACTION_READ_SCOPE)
+    artifact = get_object_or_404(Artifact, pk=artifact_id, tenant=principal.tenant)
+    try:
+        DisclosureTier(tier)
+    except ValueError as exc:
+        raise HttpError(400, 'tier must be pointer, summary or full') from exc
+    if element_id not in artifact.layers:
+        raise HttpError(404, 'element tier is not materialized')
+    # A newer source can close a prior claim. Read the graph projection that
+    # temporal publication refreshed, rather than the capture-time snapshot.
+    return SchemaClient().call(principal.tenant.slug, 'read', element_id=element_id, tier=tier)
+
+
+@router.get('/runs/{run_id}')
+def document_run(request, run_id: UUID):
+    from .models import ExtractionRun
+    principal = require_machine_key(request, scope=EXTRACTION_READ_SCOPE)
+    run = get_object_or_404(ExtractionRun, pk=run_id, artifact__tenant=principal.tenant)
+    return {'run_id': str(run.id), 'kind': run.kind, 'status': run.status,
+            'stages': run.stage_history, 'parser_receipt': run.parser_receipt, 'error': run.error}
 
 
 class SubmitRequest(Schema):
@@ -248,7 +313,7 @@ def reviews_since(request, since: str):
     if parsed is None:
         raise HttpError(400, "since must be an ISO-8601 timestamp")
     if timezone.is_naive(parsed):
-        parsed = timezone.make_aware(parsed, datetime_timezone.utc)
+        parsed = timezone.make_aware(parsed, UTC)
     decisions = ExtractionReview.objects.filter(
         tenant=principal.tenant,
         created_at__gte=parsed,

@@ -1,0 +1,60 @@
+{
+  "texts": [
+    "Lease record LEASE-09-009",
+    "reference: LEASE-09-009",
+    "person: Sam Patel",
+    "amount: 2530",
+    "deadline: 2026-09-15",
+    "Sam Patel approved the lease."
+  ],
+  "tables": [],
+  "merged_cells": [],
+  "headings": [
+    [
+      "Lease record LEASE-09-009",
+      1
+    ]
+  ],
+  "fields": {
+    "reference": {
+      "class": "exact",
+      "value": "LEASE-09-009"
+    },
+    "person": {
+      "class": "semantic",
+      "value": "Sam Patel",
+      "aliases": []
+    },
+    "amount": {
+      "class": "tolerance",
+      "value": 2530,
+      "tolerance": 0.01
+    },
+    "deadline": {
+      "class": "exact",
+      "value": "2026-09-15"
+    }
+  },
+  "spans": {
+    "person": []
+  },
+  "relations": [
+    [
+      "Sam Patel",
+      "approved",
+      "lease"
+    ]
+  ],
+  "claims": [
+    {
+      "text": "Sam Patel approved the lease.",
+      "quote": "Sam Patel approved the lease.",
+      "supported": true
+    },
+    {
+      "text": "Sam Patel rejected the lease.",
+      "quote": "Sam Patel approved the lease.",
+      "supported": false
+    }
+  ]
+}

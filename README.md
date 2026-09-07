@@ -14,6 +14,10 @@ It also owns the authenticated `theorem.competence.v1` fit/refit job boundary.
 The competence worker fits selection-corrected Beta-Bernoulli scorers, publishes
 content-addressed prior/model artifacts, and exposes inspectable recovery state.
 
+Index discovery and TabICLv2 corpus executors are available through
+`POST /internal/index/execute` with `offload:invoke` machine-key admission.
+See [executor contracts, model provenance and validation](theorem_ml/executors/README.md).
+
 ## Stack
 
 - Django 5.x + django-ninja

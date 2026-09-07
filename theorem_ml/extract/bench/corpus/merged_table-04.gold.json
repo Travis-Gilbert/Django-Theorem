@@ -1,0 +1,86 @@
+{
+  "texts": [
+    "Lease record LEASE-05-004",
+    "reference: LEASE-05-004",
+    "person: Morgan Ellis",
+    "amount: 1855",
+    "deadline: 2026-04-15",
+    "Morgan Ellis approved the lease.",
+    "Payment schedule",
+    "1855",
+    "monthly"
+  ],
+  "tables": [
+    [
+      [
+        "Payment schedule",
+        ""
+      ],
+      [
+        "1855",
+        "monthly"
+      ]
+    ]
+  ],
+  "merged_cells": [
+    [
+      {
+        "row": 0,
+        "column": 0,
+        "row_span": 1,
+        "col_span": 2
+      }
+    ]
+  ],
+  "headings": [
+    [
+      "Lease record LEASE-05-004",
+      1
+    ]
+  ],
+  "fields": {
+    "reference": {
+      "class": "exact",
+      "value": "LEASE-05-004"
+    },
+    "person": {
+      "class": "semantic",
+      "value": "Morgan Ellis",
+      "aliases": []
+    },
+    "amount": {
+      "class": "tolerance",
+      "value": 1855,
+      "tolerance": 0.01
+    },
+    "deadline": {
+      "class": "exact",
+      "value": "2026-04-15"
+    }
+  },
+  "spans": {
+    "person": [
+      "Morgan Ellis",
+      "Morgan Ellis"
+    ]
+  },
+  "relations": [
+    [
+      "Morgan Ellis",
+      "approved",
+      "lease"
+    ]
+  ],
+  "claims": [
+    {
+      "text": "Morgan Ellis approved the lease.",
+      "quote": "Morgan Ellis approved the lease.",
+      "supported": true
+    },
+    {
+      "text": "Morgan Ellis rejected the lease.",
+      "quote": "Morgan Ellis approved the lease.",
+      "supported": false
+    }
+  ]
+}

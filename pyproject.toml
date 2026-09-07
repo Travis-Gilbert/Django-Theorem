@@ -18,13 +18,39 @@ dependencies = [
   "pyarrow>=19.0",
   "pygraphviz==2.0.1",
   "diagrams==0.25.1",
+  "docling==2.126.0",
+  "paddleocr[doc-parser]==3.7.0",
+  "paddlepaddle>=3.2.1,<4",
+  "gliner2[local]==2.0.0",
+  "transformers>=4.42,<5",
+  "huggingface-hub>=0.23,<1",
+  "pypdfium2>=5,<6",
+  "beautifulsoup4>=4.12,<5",
+  "spacy==3.8.16",
+  "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
+  "minicheck @ git+https://github.com/Liyan06/MiniCheck.git@b58b9fa69acbd1015ec970fa65dd752413a053d2",
+  "accelerate>=1,<2",
+  "mlflow>=3.1,<4",
+  "river==0.26.1",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest", "pytest-django"]
+index = ["numpy>=1.26", "networkx==3.6.1", "mlflow-skinny>=3.1,<4"]
+index-corpus = ["theorem-control-plane[index]", "tabicl @ git+https://github.com/soda-inria/tabicl.git@0dbff3ec8fc68c123c87af77b0ea8b25cd2d23f3"]
 
 [tool.django]
 settings_module = "theorem_control.settings"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["apps*", "bridges*", "theorem_control*", "theorem_ml*"]
+
+[tool.setuptools.package-data]
+"theorem_ml.extract.bench" = ["thresholds.json", "corpus/*"]
 
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "theorem_control.settings"

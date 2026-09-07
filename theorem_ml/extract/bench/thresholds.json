@@ -1,0 +1,131 @@
+{
+  "version": "authored-corpus-v1",
+  "provenance": "Engineering acceptance policy for this authored corpus, fixed before full model evaluation; not a published benchmark score or production accuracy claim.",
+  "aggregation": "Arithmetic mean over all required documents; missing documents or metrics block acceptance. Reference-only stages still require complete measurements.",
+  "stages": {
+    "parse.docling": {
+      "minimum": {},
+      "reason": "Measured comparison baseline; production selection is evaluated in parse.native."
+    },
+    "parse.mineru": {
+      "minimum": {},
+      "reason": "External comparison baseline, never a production executor."
+    },
+    "parse.paddle": {
+      "minimum": {
+        "exact_text_f1": 0.95,
+        "reading_order": 0.95,
+        "table_structure_f1": 0.9,
+        "merged_cells_f1": 0.9,
+        "heading_hierarchy_f1": 0.9,
+        "span_recoverability": 1.0
+      },
+      "reason": "At most five percent text/order loss and ten percent structure loss; every output byte span must recover exactly. The ten merged-table sources are also gated separately so empty-table documents cannot dilute failures.",
+      "category_minimum": {
+        "merged_table": {
+          "table_structure_f1": 0.9,
+          "merged_cells_f1": 0.9
+        }
+      }
+    },
+    "parse.native": {
+      "minimum": {
+        "exact_text_f1": 0.95,
+        "reading_order": 0.95,
+        "table_structure_f1": 0.9,
+        "merged_cells_f1": 0.9,
+        "heading_hierarchy_f1": 0.9,
+        "span_recoverability": 1.0
+      },
+      "reason": "Apply the same preservation contract to the selected production parser. The ten merged-table sources are also gated separately so empty-table documents cannot dilute failures.",
+      "category_minimum": {
+        "merged_table": {
+          "table_structure_f1": 0.9,
+          "merged_cells_f1": 0.9
+        }
+      }
+    },
+    "spans.gliner2": {
+      "minimum": {
+        "span_f1": 0.9,
+        "label.person.f1": 0.9
+      },
+      "reason": "Require ninety percent occurrence-sensitive F1, including the declared entity label separately."
+    },
+    "spans.relex": {
+      "minimum": {},
+      "reason": "Evaluation-only relation baseline; its scores cannot gate or change production relation writes."
+    },
+    "fields": {
+      "minimum": {
+        "field_accuracy": 0.9
+      },
+      "maximum": {
+        "hallucinated": 0
+      },
+      "reason": "Require ninety percent per-field correctness and no invented undeclared fields."
+    },
+    "claims.decompose": {
+      "minimum": {
+        "nonempty_atom_set": 1.0
+      },
+      "strict_minimum": {
+        "atom_stability": 0.99
+      },
+      "exclude_categories": [
+        "code"
+      ],
+      "reason": "O5.1 requires above-threshold stability: cosine must exceed .99 across three runs. Every authored eligible document contains a proposition, so empty sets cannot pass."
+    },
+    "claims.verify.minicheck": {
+      "minimum": {
+        "gold_agreement": 0.9
+      },
+      "reason": "Require ninety percent agreement on separately authored supported and unsupported claims."
+    },
+    "resolve.link": {
+      "minimum": {
+        "resolution_accuracy": 0.9
+      },
+      "reason": "Require ninety percent occurrence-sensitive identity agreement with entities actually created/read in the admitted tenant."
+    }
+  },
+  "comparisons": [
+    {
+      "name": "O2.2_multicolumn_reading_order",
+      "stage": "parse.paddle",
+      "reference": "parse.mineru",
+      "category": "multi_column",
+      "metric": "reading_order",
+      "max_regression": 0.02,
+      "reason": "Paddle may trail MinerU by at most two percentage points on the same ten multi-column sources."
+    },
+    {
+      "name": "W1_docx_text_parity",
+      "stage": "parse.paddle",
+      "reference": "parse.docling",
+      "category": "docx",
+      "metric": "exact_text_f1",
+      "max_difference": 0.02,
+      "reason": "Same authored DOCX comparison PDF: permit at most two points difference in preserved text."
+    },
+    {
+      "name": "W1_docx_structure_parity",
+      "stage": "parse.paddle",
+      "reference": "parse.docling",
+      "category": "docx",
+      "metric": "heading_hierarchy_f1",
+      "max_difference": 0.02,
+      "reason": "Same authored DOCX comparison PDF: require heading preservation parity."
+    },
+    {
+      "name": "W1_docx_table_parity",
+      "stage": "parse.paddle",
+      "reference": "parse.docling",
+      "category": "docx",
+      "metric": "table_structure_f1",
+      "max_difference": 0.02,
+      "reason": "Same authored DOCX comparison PDF: require table preservation parity."
+    }
+  ]
+}

@@ -24,6 +24,7 @@ from apps.orchestration.models import Job as OrchestrationJob
 from apps.orchestration.tasks import _fail_job, _post_provenance, dispatch_offload
 
 from .models import ExtractionJob, ExtractionShard
+from .document_tasks import admit_document, escalate_claims, sweep_document_jobs  # noqa: F401
 from .planner import (
     ExtractionPlanningError,
     ShardPlan,

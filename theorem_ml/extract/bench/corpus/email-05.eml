@@ -1,0 +1,12 @@
+From: records@example.invalid
+To: archive@example.invalid
+Subject: Lease record LEASE-06-005
+Date: Tue, 01 Sep 2026 12:00:00 +0000
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+reference: LEASE-06-005
+person: Taylor Chen
+amount: 2015
+deadline: 2026-05-15
+Taylor Chen approved the lease.

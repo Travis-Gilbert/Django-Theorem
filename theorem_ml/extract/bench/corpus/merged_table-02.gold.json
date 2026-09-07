@@ -1,0 +1,86 @@
+{
+  "texts": [
+    "Lease record LEASE-05-002",
+    "reference: LEASE-05-002",
+    "person: Jordan Lee",
+    "amount: 1785",
+    "deadline: 2026-02-15",
+    "Jordan Lee approved the lease.",
+    "Payment schedule",
+    "1785",
+    "monthly"
+  ],
+  "tables": [
+    [
+      [
+        "Payment schedule",
+        ""
+      ],
+      [
+        "1785",
+        "monthly"
+      ]
+    ]
+  ],
+  "merged_cells": [
+    [
+      {
+        "row": 0,
+        "column": 0,
+        "row_span": 1,
+        "col_span": 2
+      }
+    ]
+  ],
+  "headings": [
+    [
+      "Lease record LEASE-05-002",
+      1
+    ]
+  ],
+  "fields": {
+    "reference": {
+      "class": "exact",
+      "value": "LEASE-05-002"
+    },
+    "person": {
+      "class": "semantic",
+      "value": "Jordan Lee",
+      "aliases": []
+    },
+    "amount": {
+      "class": "tolerance",
+      "value": 1785,
+      "tolerance": 0.01
+    },
+    "deadline": {
+      "class": "exact",
+      "value": "2026-02-15"
+    }
+  },
+  "spans": {
+    "person": [
+      "Jordan Lee",
+      "Jordan Lee"
+    ]
+  },
+  "relations": [
+    [
+      "Jordan Lee",
+      "approved",
+      "lease"
+    ]
+  ],
+  "claims": [
+    {
+      "text": "Jordan Lee approved the lease.",
+      "quote": "Jordan Lee approved the lease.",
+      "supported": true
+    },
+    {
+      "text": "Jordan Lee rejected the lease.",
+      "quote": "Jordan Lee approved the lease.",
+      "supported": false
+    }
+  ]
+}

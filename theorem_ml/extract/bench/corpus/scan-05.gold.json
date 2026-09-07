@@ -1,0 +1,63 @@
+{
+  "texts": [
+    "Lease record LEASE-02-005",
+    "reference: LEASE-02-005",
+    "person: Taylor Chen",
+    "amount: 1515",
+    "deadline: 2026-05-15",
+    "Taylor Chen approved the lease."
+  ],
+  "tables": [],
+  "merged_cells": [],
+  "headings": [
+    [
+      "Lease record LEASE-02-005",
+      1
+    ]
+  ],
+  "fields": {
+    "reference": {
+      "class": "exact",
+      "value": "LEASE-02-005"
+    },
+    "person": {
+      "class": "semantic",
+      "value": "Taylor Chen",
+      "aliases": []
+    },
+    "amount": {
+      "class": "tolerance",
+      "value": 1515,
+      "tolerance": 0.01
+    },
+    "deadline": {
+      "class": "exact",
+      "value": "2026-05-15"
+    }
+  },
+  "spans": {
+    "person": [
+      "Taylor Chen",
+      "Taylor Chen"
+    ]
+  },
+  "relations": [
+    [
+      "Taylor Chen",
+      "approved",
+      "lease"
+    ]
+  ],
+  "claims": [
+    {
+      "text": "Taylor Chen approved the lease.",
+      "quote": "Taylor Chen approved the lease.",
+      "supported": true
+    },
+    {
+      "text": "Taylor Chen rejected the lease.",
+      "quote": "Taylor Chen approved the lease.",
+      "supported": false
+    }
+  ]
+}

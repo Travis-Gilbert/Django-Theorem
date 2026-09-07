@@ -1,0 +1,60 @@
+{
+  "texts": [
+    "Lease record LEASE-09-008",
+    "reference: LEASE-09-008",
+    "person: Drew Bennett",
+    "amount: 2495",
+    "deadline: 2026-08-15",
+    "Drew Bennett approved the lease."
+  ],
+  "tables": [],
+  "merged_cells": [],
+  "headings": [
+    [
+      "Lease record LEASE-09-008",
+      1
+    ]
+  ],
+  "fields": {
+    "reference": {
+      "class": "exact",
+      "value": "LEASE-09-008"
+    },
+    "person": {
+      "class": "semantic",
+      "value": "Drew Bennett",
+      "aliases": []
+    },
+    "amount": {
+      "class": "tolerance",
+      "value": 2495,
+      "tolerance": 0.01
+    },
+    "deadline": {
+      "class": "exact",
+      "value": "2026-08-15"
+    }
+  },
+  "spans": {
+    "person": []
+  },
+  "relations": [
+    [
+      "Drew Bennett",
+      "approved",
+      "lease"
+    ]
+  ],
+  "claims": [
+    {
+      "text": "Drew Bennett approved the lease.",
+      "quote": "Drew Bennett approved the lease.",
+      "supported": true
+    },
+    {
+      "text": "Drew Bennett rejected the lease.",
+      "quote": "Drew Bennett approved the lease.",
+      "supported": false
+    }
+  ]
+}

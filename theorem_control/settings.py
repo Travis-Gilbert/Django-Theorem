@@ -164,6 +164,7 @@ EXTRACTION_MAX_INPUT_BYTES = env.int(
 EXTRACTION_SWEEP_INTERVAL_SECONDS = env.int(
     "EXTRACTION_SWEEP_INTERVAL_SECONDS", default=300
 )
+EXTRACTION_FRONTIER_BINDINGS = env.json("EXTRACTION_FRONTIER_BINDINGS", default=[])
 
 THEOREM_API_BASE = env("THEOREM_API_BASE", default="http://127.0.0.1:8080")
 THEOREM_MACHINE_KEY = env("THEOREM_MACHINE_KEY", default="")
@@ -216,6 +217,10 @@ COMPETENCE_SWEEP_INTERVAL_SECONDS = env.int(
     "COMPETENCE_SWEEP_INTERVAL_SECONDS", default=60 * 60
 )
 CELERY_BEAT_SCHEDULE = {
+    "document-extraction-sweep": {
+        "task": "apps.extraction.document_tasks.sweep_document_jobs",
+        "schedule": EXTRACTION_SWEEP_INTERVAL_SECONDS,
+    },
     "competence-sleep-cycle": {
         "task": "apps.competence.tasks.sweep_competence_jobs",
         "schedule": COMPETENCE_SWEEP_INTERVAL_SECONDS,
