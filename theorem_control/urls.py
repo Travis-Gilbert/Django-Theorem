@@ -5,6 +5,7 @@ from django.http import JsonResponse
 from django.urls import path
 from ninja import NinjaAPI
 
+from apps.billing.api import router as billing_router
 from apps.competence.api import router as competence_router
 from apps.extraction.api import router as extraction_router
 from apps.identity.webhooks import router as webhooks_router
@@ -21,6 +22,7 @@ api.add_router("/internal/layout", layout_router)
 api.add_router("/internal/rendering", rendering_router)
 api.add_router("/internal/extraction", extraction_router)
 api.add_router("/internal/rl", rl_router)
+api.add_router("/internal/billing", billing_router)
 from theorem_ml.executors.api import router as index_router
 
 

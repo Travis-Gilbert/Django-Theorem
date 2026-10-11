@@ -34,6 +34,7 @@ RL_TRAIN_SCOPE = "rl:train"
 RL_READ_SCOPE = "rl:read"
 RL_CANCEL_SCOPE = "rl:cancel"
 RL_WILDCARD_SCOPE = "rl:*"
+BILLING_READ_SCOPE = "billing:read"
 
 
 @dataclass(frozen=True)
