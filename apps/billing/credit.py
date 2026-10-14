@@ -21,6 +21,31 @@ CREDIT_LIMIT = "monthly_credit_usd"
 MICROS_PER_USD = Decimal(1_000_000)
 
 
+def _meter_micros(counters: object) -> int:
+    """Integer micros already spent; unreadable or negative counters are none."""
+    if not isinstance(counters, dict):
+        return 0
+    raw = counters.get(CREDIT_METER, 0)
+    try:
+        micros = int(raw or 0)
+    except (TypeError, ValueError):
+        return 0
+    return max(micros, 0)
+
+
+def _plan_limit(raw: object) -> Decimal | None:
+    """A non-negative finite allowance, or none when the plan does not state one."""
+    if raw is None:
+        return None
+    try:
+        limit = Decimal(str(raw))
+    except (ArithmeticError, ValueError, TypeError):
+        return None
+    if not limit.is_finite() or limit < 0:
+        return None
+    return limit
+
+
 @dataclass(frozen=True)
 class CreditAllowance:
     period_start: date
@@ -53,7 +78,7 @@ def credit_allowance(tenant_id: UUID | str, today: date) -> CreditAllowance:
         micros = 0
     else:
         period_start, period_end = usage.period_start, usage.period_end
-        micros = int((usage.counters or {}).get(CREDIT_METER, 0) or 0)
+        micros = _meter_micros(usage.counters)
 
     subscription = (
         Subscription.objects.select_related("plan")
@@ -63,13 +88,7 @@ def credit_allowance(tenant_id: UUID | str, today: date) -> CreditAllowance:
     )
     limit = None
     if subscription is not None:
-        raw = (subscription.plan.limits or {}).get(CREDIT_LIMIT)
-        try:
-            limit = None if raw is None else Decimal(str(raw))
-        except ArithmeticError:
-            limit = None
-        if limit is not None and limit < 0:
-            limit = None
+        limit = _plan_limit((subscription.plan.limits or {}).get(CREDIT_LIMIT))
 
     return CreditAllowance(
         period_start=period_start,

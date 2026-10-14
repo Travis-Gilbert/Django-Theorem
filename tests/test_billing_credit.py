@@ -10,7 +10,7 @@ from django.test import Client
 from django.utils import timezone
 
 from apps.billing.credit import calendar_period, credit_allowance
-from apps.billing.models import Plan, Subscription
+from apps.billing.models import Plan, Subscription, Usage
 from apps.billing.usage import accumulate
 from apps.keys.mint import mint_api_key
 from apps.tenancy.models import Tenant
@@ -60,6 +60,8 @@ def test_spend_and_the_plan_allowance_are_reported_for_the_tenant_alone():
     body = response.json()
     assert body["used_usd"] == pytest.approx(3.2)
     assert body["limit_usd"] == pytest.approx(20.0)
+    assert body["period_start"] == start.isoformat()
+    assert body["period_end"] == end.isoformat()
 
 
 @pytest.mark.django_db
@@ -74,6 +76,30 @@ def test_a_canceled_plan_states_no_limit_and_a_negative_one_is_ignored():
     Subscription.objects.create(tenant=tenant, plan=broken)
     assert credit_allowance(tenant.id, today).limit_usd is None
 
+    unreadable = Plan.objects.create(
+        code=f"bad-{uuid.uuid4().hex[:8]}", limits={"monthly_credit_usd": "unlimited"}
+    )
+    tenant_unreadable = _tenant("unreadable")
+    Subscription.objects.create(tenant=tenant_unreadable, plan=unreadable)
+    assert credit_allowance(tenant_unreadable.id, today).limit_usd is None
+
+
+@pytest.mark.django_db
+def test_an_unreadable_meter_is_reported_as_nothing_spent():
+    tenant = _tenant("corrupt")
+    start, end = calendar_period(timezone.now().date())
+    Usage.objects.create(
+        tenant=tenant,
+        period_start=start,
+        period_end=end,
+        counters={"credit_usd_micros": "not-a-meter"},
+    )
+    allowance = credit_allowance(tenant.id, timezone.now().date())
+    assert allowance.used_usd == 0
+    response = _client(tenant, ["billing:read"]).get("/internal/billing/credit")
+    assert response.status_code == 200, response.content
+    assert response.json()["used_usd"] == 0.0
+
 
 @pytest.mark.django_db
 def test_credit_is_refused_without_the_billing_scope():
@@ -81,5 +107,6 @@ def test_credit_is_refused_without_the_billing_scope():
     assert Client().get("/internal/billing/credit").status_code == 401
     refused = _client(tenant, ["offload:*"]).get("/internal/billing/credit")
     assert refused.status_code == 403
+    assert refused.json()["detail"] == "machine API key lacks billing:read scope"
     # The positive control in the same fixture: the scope is what was missing.
     assert _client(tenant, ["billing:read"]).get("/internal/billing/credit").status_code == 200
