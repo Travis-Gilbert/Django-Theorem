@@ -26,6 +26,6 @@ this implementation, and local fake-client tests do not prove one.
 
 Validation: `.venv/bin/python -m pytest tests/test_web_content_artifacts.py tests/test_artifacts.py -q`.
 The Rust ignored test `web_object::tests::live_s3_web_object_reopen_digest_and_range`
-uses the shared `ARTIFACT_S3_*` settings plus an explicit `THEOREM_WEB_TEST_TENANT`
+uses the shared `ARTIFACT_S3_*` settings plus an explicit `THEOREM_WEB_OBJECT_TEST_TENANT`
 to validate an isolated test bucket. It writes immutable content and leaves it
 for retention policy; do not point it at a tenant without that authorization.
