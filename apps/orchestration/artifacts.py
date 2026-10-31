@@ -1,4 +1,4 @@
-"""Tenant-bound Arrow IPC artifacts backed by Neon S3-compatible storage."""
+"""Tenant-bound artifacts backed by provider-neutral S3-compatible storage."""
 
 from __future__ import annotations
 
@@ -49,6 +49,19 @@ class StoredContentArtifact:
     payload_digest: str
     media_type: str
     byte_length: int
+
+
+@dataclass(frozen=True)
+class WebObjectDescriptor:
+    """Wire-compatible with RustyWeb WebObjectRef; never contains credentials."""
+
+    digest: str
+    object_key: str
+    media_type: str
+    byte_length: int
+    snapshot_id: str
+    scope: dict[str, str]
+    encoding: str | None = None
 
 
 def sha256_digest(payload: bytes) -> str:
@@ -142,7 +155,7 @@ class ArtifactStore:
             region_name=region,
             aws_access_key_id=access_key_id,
             aws_secret_access_key=secret_access_key,
-            # Neon object storage presents TLS for its endpoint hostname. Keep
+            # S3-compatible providers may present TLS for the endpoint hostname. Keep
             # the bucket in the URL path rather than making it a subdomain.
             config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
         )
@@ -185,6 +198,57 @@ class ArtifactStore:
             return call()
         except (BotoCoreError, ClientError) as exc:
             raise ArtifactStorageError(f"artifact storage {action} failed") from exc
+
+    def write_web_content(
+        self,
+        tenant_id: UUID,
+        snapshot_id: str,
+        payload: bytes,
+        *,
+        media_type: str,
+        kind: str = "text",
+    ) -> WebObjectDescriptor:
+        """Write tenant-bound captured bytes and verify the content identity."""
+        if kind not in {"raw", "text", "captures"} or not snapshot_id.strip():
+            raise ArtifactValidationError("web content scope is malformed")
+        if not media_type.strip() or len(payload) > self.max_bytes:
+            raise ArtifactValidationError("web content media type or size is invalid")
+        digest = sha256_digest(payload)
+        key = f"{self.tenant_prefix(tenant_id)}web/{kind}/{self._content_digest(digest)}"
+        self.validate_key(tenant_id, key)
+        self._storage_call(
+            "write web content",
+            lambda: self.client.put_object(
+                Bucket=self.bucket, Key=key, Body=payload, ContentType=media_type
+            ),
+        )
+        if sha256_digest(self.get_bytes(tenant_id, key)) != digest:
+            raise ArtifactValidationError("web content readback digest mismatch")
+        return WebObjectDescriptor(
+            digest=digest,
+            object_key=key,
+            media_type=media_type,
+            byte_length=len(payload),
+            snapshot_id=snapshot_id,
+            scope={"visibility": "tenant", "tenant_id": str(tenant_id)},
+        )
+
+    def read_web_content(
+        self, tenant_id: UUID, descriptor: WebObjectDescriptor
+    ) -> bytes:
+        if descriptor.scope != {"visibility": "tenant", "tenant_id": str(tenant_id)}:
+            raise ArtifactValidationError("web content tenant scope mismatch")
+        digest = self._content_digest(descriptor.digest)
+        allowed = {
+            f"{self.tenant_prefix(tenant_id)}web/{kind}/{digest}"
+            for kind in {"raw", "text", "captures"}
+        }
+        if descriptor.object_key not in allowed or descriptor.encoding is not None:
+            raise ArtifactValidationError("web content descriptor is invalid")
+        payload = self.get_bytes(tenant_id, descriptor.object_key)
+        if len(payload) != descriptor.byte_length or sha256_digest(payload) != descriptor.digest:
+            raise ArtifactValidationError("web content digest or length mismatch")
+        return payload
 
     def allocate_input_key(self, tenant_id: UUID) -> str:
         return f"{self.tenant_prefix(tenant_id)}inputs/{uuid4()}.arrow"
