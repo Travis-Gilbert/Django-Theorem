@@ -1,0 +1,473 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:theorem:knowledge_evolution:v1",
+  "title": "Theorem knowledge evolution request and terminal result",
+  "description": "Wire validity grants neither execution nor publication authority. Artifact references require independent authorized readback. All quantities are canonical decimal strings (0..9999999999999999999); IDs are opaque strings. No transport credentials or expiring URLs.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/request"
+    },
+    {
+      "$ref": "#/$defs/result"
+    }
+  ],
+  "$defs": {
+    "text": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "\\S"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "git_revision": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "count": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,18})$"
+    },
+    "positive_count": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]{0,18}$"
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "artifact_id": {
+          "$ref": "#/$defs/text"
+        },
+        "payload_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "media_type": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "pattern": "\\S"
+        },
+        "byte_length": {
+          "$ref": "#/$defs/count"
+        }
+      },
+      "required": [
+        "artifact_id",
+        "payload_digest",
+        "media_type",
+        "byte_length"
+      ]
+    },
+    "revision": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "component_id": {
+          "$ref": "#/$defs/text"
+        },
+        "revision": {
+          "$ref": "#/$defs/digest"
+        }
+      },
+      "required": [
+        "component_id",
+        "revision"
+      ]
+    },
+    "engine": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "source_revision": {
+          "$ref": "#/$defs/git_revision"
+        },
+        "adapter_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "dependency_lock": {
+          "$ref": "#/$defs/artifact"
+        }
+      },
+      "required": [
+        "source_revision",
+        "adapter_digest",
+        "dependency_lock"
+      ]
+    },
+    "engines": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "harness2": {
+          "$ref": "#/$defs/engine"
+        },
+        "recuris": {
+          "$ref": "#/$defs/engine"
+        }
+      },
+      "required": [
+        "harness2",
+        "recuris"
+      ]
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "model_tokens": {
+          "$ref": "#/$defs/count"
+        },
+        "model_calls": {
+          "$ref": "#/$defs/count"
+        },
+        "tool_calls": {
+          "$ref": "#/$defs/count"
+        },
+        "compute_milliseconds": {
+          "$ref": "#/$defs/count"
+        },
+        "proof_attempts": {
+          "$ref": "#/$defs/count"
+        },
+        "cost_microusd": {
+          "$ref": "#/$defs/count"
+        },
+        "memory_bytes": {
+          "$ref": "#/$defs/count"
+        },
+        "wall_time_milliseconds": {
+          "$ref": "#/$defs/positive_count"
+        },
+        "concurrency": {
+          "$ref": "#/$defs/positive_count"
+        },
+        "candidate_count": {
+          "$ref": "#/$defs/positive_count"
+        }
+      },
+      "required": [
+        "model_tokens",
+        "model_calls",
+        "tool_calls",
+        "compute_milliseconds",
+        "proof_attempts",
+        "cost_microusd",
+        "memory_bytes",
+        "wall_time_milliseconds",
+        "concurrency",
+        "candidate_count"
+      ]
+    },
+    "mutation_surface": {
+      "type": "string",
+      "enum": [
+        "system_prompt",
+        "guardrails",
+        "memory",
+        "tool_guidance",
+        "subagents",
+        "skills",
+        "scripts",
+        "plugins"
+      ]
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "contract": {
+          "const": "theorem.knowledge_evolution.v1"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/operation_id"
+        },
+        "campaign_id": {
+          "$ref": "#/$defs/text"
+        },
+        "attempt_epoch": {
+          "$ref": "#/$defs/count"
+        },
+        "message_kind": {
+          "const": "request"
+        },
+        "principal_ref": {
+          "$ref": "#/$defs/text"
+        },
+        "base_revisions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/revision"
+          },
+          "minItems": 1,
+          "maxItems": 256,
+          "uniqueItems": true
+        },
+        "allowed_mutation_surfaces": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/mutation_surface"
+          },
+          "minItems": 1,
+          "maxItems": 8,
+          "uniqueItems": true
+        },
+        "immutable_constraints": {
+          "$ref": "#/$defs/artifact"
+        },
+        "task_snapshot": {
+          "$ref": "#/$defs/artifact"
+        },
+        "environment_snapshot": {
+          "$ref": "#/$defs/artifact"
+        },
+        "authorized_evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/artifact"
+          },
+          "minItems": 0,
+          "maxItems": 256,
+          "uniqueItems": true
+        },
+        "protocol": {
+          "$ref": "#/$defs/artifact"
+        },
+        "effective_grant": {
+          "$ref": "#/$defs/artifact"
+        },
+        "budget": {
+          "$ref": "#/$defs/budget"
+        },
+        "deadline_unix_milliseconds": {
+          "$ref": "#/$defs/positive_count"
+        },
+        "cancellation_id": {
+          "$ref": "#/$defs/text"
+        },
+        "engines": {
+          "$ref": "#/$defs/engines"
+        },
+        "required_output_schema": {
+          "const": "theorem.knowledge_evolution.v1/result"
+        }
+      },
+      "required": [
+        "contract",
+        "operation_id",
+        "campaign_id",
+        "attempt_epoch",
+        "message_kind",
+        "principal_ref",
+        "base_revisions",
+        "allowed_mutation_surfaces",
+        "immutable_constraints",
+        "task_snapshot",
+        "environment_snapshot",
+        "authorized_evidence",
+        "protocol",
+        "effective_grant",
+        "budget",
+        "deadline_unix_milliseconds",
+        "cancellation_id",
+        "engines",
+        "required_output_schema"
+      ]
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "contract": {
+          "const": "theorem.knowledge_evolution.v1"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/operation_id"
+        },
+        "campaign_id": {
+          "$ref": "#/$defs/text"
+        },
+        "attempt_epoch": {
+          "$ref": "#/$defs/count"
+        },
+        "message_kind": {
+          "const": "result"
+        },
+        "request_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "base_revisions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/revision"
+          },
+          "minItems": 1,
+          "maxItems": 256,
+          "uniqueItems": true
+        },
+        "candidate_revision": {
+          "$ref": "#/$defs/revision"
+        },
+        "protocol": {
+          "$ref": "#/$defs/artifact"
+        },
+        "environment_snapshot": {
+          "$ref": "#/$defs/artifact"
+        },
+        "engines": {
+          "$ref": "#/$defs/engines"
+        },
+        "outcome": {
+          "enum": [
+            "candidate_ready",
+            "rejected",
+            "incomplete",
+            "cancelled",
+            "failed"
+          ]
+        },
+        "component_diff": {
+          "$ref": "#/$defs/artifact"
+        },
+        "instantiated_program_roots": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/digest"
+          },
+          "minItems": 0,
+          "maxItems": 256,
+          "uniqueItems": true
+        },
+        "baseline_runs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/artifact"
+          },
+          "minItems": 0,
+          "maxItems": 256,
+          "uniqueItems": true
+        },
+        "candidate_runs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/artifact"
+          },
+          "minItems": 0,
+          "maxItems": 256,
+          "uniqueItems": true
+        },
+        "coverage": {
+          "$ref": "#/$defs/artifact"
+        },
+        "metrics": {
+          "$ref": "#/$defs/artifact"
+        },
+        "validation": {
+          "$ref": "#/$defs/artifact"
+        },
+        "proof_outcome": {
+          "enum": [
+            "proved",
+            "rejected",
+            "proof_unavailable",
+            "proof_timeout",
+            "not_required"
+          ]
+        },
+        "proof": {
+          "$ref": "#/$defs/artifact"
+        },
+        "cost_accounting": {
+          "$ref": "#/$defs/artifact"
+        },
+        "applicability_proposal": {
+          "$ref": "#/$defs/artifact"
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096,
+            "pattern": "\\S"
+          },
+          "minItems": 0,
+          "maxItems": 256,
+          "uniqueItems": true
+        },
+        "output_artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/artifact"
+          },
+          "minItems": 0,
+          "maxItems": 256,
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "contract",
+        "operation_id",
+        "campaign_id",
+        "attempt_epoch",
+        "message_kind",
+        "request_digest",
+        "base_revisions",
+        "protocol",
+        "environment_snapshot",
+        "engines",
+        "outcome",
+        "instantiated_program_roots",
+        "baseline_runs",
+        "candidate_runs",
+        "coverage",
+        "validation",
+        "proof_outcome",
+        "cost_accounting",
+        "limitations",
+        "output_artifacts"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "outcome": {
+                "const": "candidate_ready"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "candidate_revision",
+              "component_diff",
+              "metrics",
+              "applicability_proposal"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "proof_outcome": {
+                "const": "proved"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "proof"
+            ]
+          }
+        }
+      ]
+    },
+    "operation_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "\\S"
+    }
+  }
+}

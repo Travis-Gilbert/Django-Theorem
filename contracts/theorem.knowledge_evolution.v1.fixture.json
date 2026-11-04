@@ -1,0 +1,163 @@
+{
+  "request": {
+    "contract": "theorem.knowledge_evolution.v1",
+    "message_kind": "request",
+    "operation_id": "operation:9007199254740993",
+    "campaign_id": "campaign:迁移-λ",
+    "attempt_epoch": "9007199254740993",
+    "principal_ref": "principal:fixture-only",
+    "base_revisions": [
+      {
+        "component_id": "method:generated-client",
+        "revision": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      }
+    ],
+    "allowed_mutation_surfaces": [
+      "skills",
+      "scripts"
+    ],
+    "immutable_constraints": {
+      "artifact_id": "artifact:constraints",
+      "payload_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "media_type": "application/json",
+      "byte_length": "123"
+    },
+    "task_snapshot": {
+      "artifact_id": "artifact:task",
+      "payload_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "media_type": "application/json",
+      "byte_length": "123"
+    },
+    "environment_snapshot": {
+      "artifact_id": "artifact:environment",
+      "payload_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "media_type": "application/json",
+      "byte_length": "123"
+    },
+    "authorized_evidence": [],
+    "protocol": {
+      "artifact_id": "artifact:protocol",
+      "payload_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "media_type": "application/json",
+      "byte_length": "123"
+    },
+    "effective_grant": {
+      "artifact_id": "artifact:grant",
+      "payload_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "media_type": "application/json",
+      "byte_length": "123"
+    },
+    "budget": {
+      "model_tokens": "1",
+      "model_calls": "1",
+      "tool_calls": "1",
+      "compute_milliseconds": "1",
+      "proof_attempts": "1",
+      "cost_microusd": "1",
+      "memory_bytes": "1",
+      "wall_time_milliseconds": "1",
+      "concurrency": "1",
+      "candidate_count": "1"
+    },
+    "deadline_unix_milliseconds": "1794000000000",
+    "cancellation_id": "cancel:fixture",
+    "engines": {
+      "harness2": {
+        "source_revision": "6868817518876de8fd170c6a8354daca273b6191",
+        "adapter_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "dependency_lock": {
+          "artifact_id": "artifact:harness2-lock",
+          "payload_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "media_type": "application/json",
+          "byte_length": "123"
+        }
+      },
+      "recuris": {
+        "source_revision": "7d3745ab787b1206ccd981cb1511100476097266",
+        "adapter_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "dependency_lock": {
+          "artifact_id": "artifact:recuris-lock",
+          "payload_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "media_type": "application/json",
+          "byte_length": "123"
+        }
+      }
+    },
+    "required_output_schema": "theorem.knowledge_evolution.v1/result"
+  },
+  "result": {
+    "contract": "theorem.knowledge_evolution.v1",
+    "operation_id": "operation:9007199254740993",
+    "campaign_id": "campaign:迁移-λ",
+    "attempt_epoch": "9007199254740993",
+    "message_kind": "result",
+    "request_digest": "sha256:225472fa6c1d0a9a648e133e399cde1246f1bca5549e03be475807cd19927e99",
+    "base_revisions": [
+      {
+        "component_id": "method:generated-client",
+        "revision": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      }
+    ],
+    "protocol": {
+      "artifact_id": "artifact:protocol",
+      "payload_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "media_type": "application/json",
+      "byte_length": "123"
+    },
+    "environment_snapshot": {
+      "artifact_id": "artifact:environment",
+      "payload_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "media_type": "application/json",
+      "byte_length": "123"
+    },
+    "engines": {
+      "harness2": {
+        "source_revision": "6868817518876de8fd170c6a8354daca273b6191",
+        "adapter_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "dependency_lock": {
+          "artifact_id": "artifact:harness2-lock",
+          "payload_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "media_type": "application/json",
+          "byte_length": "123"
+        }
+      },
+      "recuris": {
+        "source_revision": "7d3745ab787b1206ccd981cb1511100476097266",
+        "adapter_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "dependency_lock": {
+          "artifact_id": "artifact:recuris-lock",
+          "payload_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "media_type": "application/json",
+          "byte_length": "123"
+        }
+      }
+    },
+    "outcome": "incomplete",
+    "instantiated_program_roots": [],
+    "baseline_runs": [],
+    "candidate_runs": [],
+    "coverage": {
+      "artifact_id": "artifact:coverage",
+      "payload_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "media_type": "application/json",
+      "byte_length": "123"
+    },
+    "validation": {
+      "artifact_id": "artifact:validation",
+      "payload_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "media_type": "application/json",
+      "byte_length": "123"
+    },
+    "proof_outcome": "proof_unavailable",
+    "cost_accounting": {
+      "artifact_id": "artifact:costs",
+      "payload_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "media_type": "application/json",
+      "byte_length": "123"
+    },
+    "limitations": [
+      "Contract fixture only; no engine execution or proof."
+    ],
+    "output_artifacts": []
+  }
+}
