@@ -1,0 +1,16 @@
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+___________ test_operation_identity_fits_existing_job_owner[request] ___________
+tests/test_knowledge_evolution_contract.py:110: in test_operation_identity_fits_existing_job_owner
+    with pytest.raises(ContractError):
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   Failed: DID NOT RAISE <class 'apps.orchestration.evolution_contract.ContractError'>
+___________ test_operation_identity_fits_existing_job_owner[result] ____________
+tests/test_knowledge_evolution_contract.py:110: in test_operation_identity_fits_existing_job_owner
+    with pytest.raises(ContractError):
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   Failed: DID NOT RAISE <class 'apps.orchestration.evolution_contract.ContractError'>
+=========================== short test summary info ============================
+FAILED ../../../../dev::test_operation_identity_fits_existing_job_owner[request]
+FAILED ../../../../dev::test_operation_identity_fits_existing_job_owner[result]
+2 failed, 49 deselected in 0.12s

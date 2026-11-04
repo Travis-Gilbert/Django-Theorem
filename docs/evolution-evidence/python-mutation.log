@@ -1,0 +1,19 @@
+Wrote /Volumes/SSD Samsung/django-theorem-worktrees/knowledge-evolution-20261104/.metrics/mutate/apps.orchestration.evolution_contract.EvolutionMessage.edn
+KILLED    apps/orchestration/evolution_contract.py:29 > -> >=
+KILLED    apps/orchestration/evolution_contract.py:35 True -> False
+KILLED    apps/orchestration/evolution_contract.py:35 False -> True
+KILLED    apps/orchestration/evolution_contract.py:49 + -> -
+KILLED    apps/orchestration/evolution_contract.py:55 != -> ==
+KILLED    apps/orchestration/evolution_contract.py:55 or -> and
+KILLED    apps/orchestration/evolution_contract.py:55 != -> ==
+KILLED    apps/orchestration/evolution_contract.py:57 != -> ==
+KILLED    apps/orchestration/evolution_contract.py:60 != -> ==
+Function Namespace                                               Killed  Survived  Uncovered  Sites   Score
+-----------------------------------------------------------------------------------------------------------
+parse    apps.orchestration.evolution_contract.EvolutionMessage       0         0          0      0    n/a
+to_bytes apps.orchestration.evolution_contract.EvolutionMessage       0         0          0      0    n/a
+__init__ apps.orchestration.evolution_contract.EvolutionMessage       3         0          0      3 100.0%
+bind_to  apps.orchestration.evolution_contract.EvolutionMessage       5         0          0      5 100.0%
+digest   apps.orchestration.evolution_contract.EvolutionMessage       1         0          0      1 100.0%
+-----------------------------------------------------------------------------------------------------------
+Total                                                                 9         0          0      9  100.0%
