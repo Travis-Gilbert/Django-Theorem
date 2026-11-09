@@ -20,20 +20,21 @@ class ProjectAdmin(admin.ModelAdmin):
 
 @admin.register(Store)
 class StoreAdmin(admin.ModelAdmin):
-    list_display = ("slug", "http_url", "grpc_url")
+    list_display = ("slug", "http_url", "grpc_url", "fly_app")
     search_fields = ("slug", "http_url")
 
 
 @admin.register(StorePlacement)
 class StorePlacementAdmin(admin.ModelAdmin):
-    """Placements are read here; moves go through ``move_tenant_store`` so
-    each step is a checked transition rather than a free edit."""
+    """Placements are read here; moves go through ``move_tenant_store`` and
+    provisioning through ``provision_tenant_store``, so each step is a checked
+    transition rather than a free edit."""
 
     list_display = ("tenant", "store", "state", "target_store", "epoch", "updated_at")
     list_filter = ("state", "store")
     search_fields = ("tenant__slug", "store__slug")
     raw_id_fields = ("tenant",)
-    readonly_fields = ("state", "target_store", "epoch")
+    readonly_fields = ("state", "target_store", "epoch", "last_error")
 
     def get_readonly_fields(self, request, obj=None):
         if obj is None:

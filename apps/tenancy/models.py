@@ -54,12 +54,16 @@ class Store(models.Model):
 
     Rust SELECT: id, slug, http_url, grpc_url. The front holds no store of its
     own; it reads ``StorePlacement`` to find each tenant's.
+
+    ``fly_app`` names the Fly app the provisioner created for this store, empty
+    for a store an operator registered by hand. Rust does not read it.
     """
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     slug = models.SlugField(max_length=128, unique=True)
     http_url = models.URLField(max_length=512)
     grpc_url = models.URLField(max_length=512)
+    fly_app = models.CharField(max_length=63, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -80,7 +84,15 @@ class StorePlacement(models.Model):
 
     Rust SELECT: tenant_id, store_id, state, target_store_id, epoch.
 
-    A move is four states the Rust front reads and routes by:
+    A new tenant's store is built first:
+
+    - ``provisioning``: the provisioner is creating ``store`` on Fly; the
+      front refuses with a retryable error.
+    - ``failed``: provisioning stopped with ``last_error``; the front refuses
+      until an operator retries (``manage.py provision_tenant_store``).
+    - ``serving`` once the store answers its readiness check.
+
+    A move between stores is four states the Rust front reads and routes by:
 
     - ``serving``: ``store`` answers everything; no move is in flight.
     - ``copying``: the graph is being copied to ``target_store``; ``store``
@@ -98,6 +110,8 @@ class StorePlacement(models.Model):
         SERVING = "serving", "Serving"
         COPYING = "copying", "Copying to target"
         DRAINING = "draining", "Draining to target"
+        PROVISIONING = "provisioning", "Provisioning"
+        FAILED = "failed", "Provisioning failed"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     tenant = models.OneToOneField(
@@ -116,6 +130,7 @@ class StorePlacement(models.Model):
         blank=True,
     )
     epoch = models.PositiveBigIntegerField(default=1)
+    last_error = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -126,7 +141,10 @@ class StorePlacement(models.Model):
             models.CheckConstraint(
                 name="control_storeplacement_target_only_while_moving",
                 condition=(
-                    models.Q(state="serving", target_store__isnull=True)
+                    models.Q(
+                        state__in=["serving", "provisioning", "failed"],
+                        target_store__isnull=True,
+                    )
                     | (
                         models.Q(state__in=["copying", "draining"], target_store__isnull=False)
                         & ~models.Q(target_store=models.F("store"))
@@ -140,12 +158,38 @@ class StorePlacement(models.Model):
             return f"{self.tenant.slug} on {self.store.slug} ({self.state} to {self.target_store.slug})"
         return f"{self.tenant.slug} on {self.store.slug}"
 
+    def mark_provisioned(self) -> None:
+        """Serve the tenant from its newly built store."""
+        with transaction.atomic():
+            locked = self._locked()
+            if locked.state != self.State.PROVISIONING:
+                raise PlacementTransitionError(f"{locked} is not provisioning")
+            locked.state = self.State.SERVING
+            locked.last_error = ""
+            locked.save(update_fields=["state", "last_error", "updated_at"])
+        self.refresh_from_db()
+
+    def mark_failed(self, error: str) -> None:
+        """Stop provisioning and keep the reason for the operator."""
+        with transaction.atomic():
+            locked = self._locked()
+            if locked.state != self.State.PROVISIONING:
+                raise PlacementTransitionError(f"{locked} is not provisioning")
+            locked.state = self.State.FAILED
+            locked.last_error = error
+            locked.save(update_fields=["state", "last_error", "updated_at"])
+        self.refresh_from_db()
+
+    def retry_provisioning(self) -> None:
+        """Send a failed placement back to the provisioner."""
+        self._step(self.State.FAILED, self.State.PROVISIONING)
+
     def begin_move(self, target: Store) -> None:
         """Start copying this tenant's graph to ``target``."""
         with transaction.atomic():
             locked = self._locked()
             if locked.state != self.State.SERVING:
-                raise PlacementTransitionError(f"{locked} is already moving")
+                raise PlacementTransitionError(f"{locked} must be serving, not {locked.state}")
             if target.pk == locked.store_id:
                 raise PlacementTransitionError(f"{locked.tenant.slug} is already on {target.slug}")
             locked.state = self.State.COPYING
@@ -174,7 +218,7 @@ class StorePlacement(models.Model):
         """Keep the tenant on its source store and forget the target."""
         with transaction.atomic():
             locked = self._locked()
-            if locked.state == self.State.SERVING:
+            if locked.state not in (self.State.COPYING, self.State.DRAINING):
                 raise PlacementTransitionError(f"{locked} is not moving")
             locked.state = self.State.SERVING
             locked.target_store = None

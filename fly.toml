@@ -6,6 +6,13 @@
 # RUNPOD_WORKER_IMAGE_DIGEST, and the ARTIFACT_S3_* credentials. Both database
 # URLs must select the imported production-data branch, not the abandoned Neon
 # Auth branch.
+#
+# Store provisioning (apps.tenancy.provisioning) builds each new tenant a
+# RustyRed store in the Theorem Fly org. It needs one more secret,
+# FLY_API_TOKEN (an org deploy token: `fly tokens create org theorem-620`),
+# and two non-secret settings: STORE_IMAGE (an immutable image digest the
+# Theorem org can pull) and STORE_SESSION_VERIFYING_KEYS_HEX (the front's
+# public session key). Until all three are set, signup leaves tenants unplaced.
 
 app = "travis-django-theorem-personal"
 primary_region = "iad"

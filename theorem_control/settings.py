@@ -170,6 +170,23 @@ THEOREM_API_BASE = env("THEOREM_API_BASE", default="http://127.0.0.1:8080")
 THEOREM_MACHINE_KEY = env("THEOREM_MACHINE_KEY", default="")
 THEOREM_MACHINE_KEY_PASSAGES = env("THEOREM_MACHINE_KEY_PASSAGES", default="")
 
+# Store provisioning (apps.tenancy.provisioning). Signup builds each tenant a
+# RustyRed store on Fly in the Theorem org. FLY_API_TOKEN is an org deploy
+# token and the only secret involved; the store gets the front's public
+# session-verifying key, never a credential. Provisioning stays off until all
+# three of FLY_API_TOKEN, STORE_IMAGE and STORE_SESSION_VERIFYING_KEYS_HEX are set.
+FLY_API_TOKEN = env("FLY_API_TOKEN", default="")
+FLY_API_BASE = env("FLY_API_BASE", default="https://api.machines.dev/v1")
+FLY_ORG_SLUG = env("FLY_ORG_SLUG", default="theorem-620")
+STORE_IMAGE = env("STORE_IMAGE", default="")
+STORE_SESSION_VERIFYING_KEYS_HEX = env("STORE_SESSION_VERIFYING_KEYS_HEX", default="")
+STORE_FLY_APP_PREFIX = env("STORE_FLY_APP_PREFIX", default="theorem-store")
+STORE_REGION = env("STORE_REGION", default="iad")
+STORE_CPUS = env.int("STORE_CPUS", default=2)
+STORE_MEMORY_MB = env.int("STORE_MEMORY_MB", default=4096)
+STORE_VOLUME_GB = env.int("STORE_VOLUME_GB", default=10)
+STORE_PROVISION_TIMEOUT_SECONDS = env.int("STORE_PROVISION_TIMEOUT_SECONDS", default=600)
+
 # Empty VALKEY_URL/REDIS_URL → tenant_cache uses in-memory dict (tests / no Redis).
 VALKEY_URL = env("VALKEY_URL", default=env("REDIS_URL", default=""))
 REDIS_URL = VALKEY_URL
