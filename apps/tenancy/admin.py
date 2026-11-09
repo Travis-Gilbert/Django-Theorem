@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Project, Tenant
+from .models import Project, Store, StorePlacement, Tenant
 
 
 @admin.register(Tenant)
@@ -16,3 +16,26 @@ class ProjectAdmin(admin.ModelAdmin):
     list_filter = ("tenant",)
     search_fields = ("slug", "display_name")
     raw_id_fields = ("tenant",)
+
+
+@admin.register(Store)
+class StoreAdmin(admin.ModelAdmin):
+    list_display = ("slug", "http_url", "grpc_url")
+    search_fields = ("slug", "http_url")
+
+
+@admin.register(StorePlacement)
+class StorePlacementAdmin(admin.ModelAdmin):
+    """Placements are read here; moves go through ``move_tenant_store`` so
+    each step is a checked transition rather than a free edit."""
+
+    list_display = ("tenant", "store", "state", "target_store", "epoch", "updated_at")
+    list_filter = ("state", "store")
+    search_fields = ("tenant__slug", "store__slug")
+    raw_id_fields = ("tenant",)
+    readonly_fields = ("state", "target_store", "epoch")
+
+    def get_readonly_fields(self, request, obj=None):
+        if obj is None:
+            return self.readonly_fields
+        return ("tenant", "store", *self.readonly_fields)
