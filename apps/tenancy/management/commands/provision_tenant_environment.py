@@ -5,7 +5,7 @@ serving one up to the pinned host binary.
 
 Signup runs the same steps in the background. Run this for a tenant created
 before environments were configured, after a ``failed`` run, or after moving
-``ENVIRONMENT_HOST_URL`` and ``ENVIRONMENT_HOST_SHA256`` to a new build. When
+``ENVIRONMENT_HOST_SHA256`` to a newly published build. When
 the tenant's store serves, it is bound to the environment too.
 """
 
@@ -18,7 +18,7 @@ from apps.tenancy.environment import (
     EnvironmentProvisioningError,
     begin_environment,
     bind_store,
-    environment_configured,
+    missing_settings,
     provision_environment,
     sprites_client_from_settings,
 )
@@ -34,11 +34,8 @@ class Command(BaseCommand):
         parser.add_argument("tenant", help="Tenant slug")
 
     def handle(self, *args, tenant: str, **options):
-        if not environment_configured():
-            raise CommandError(
-                "set SPRITES_TOKEN, ENVIRONMENT_HOST_URL, ENVIRONMENT_HOST_SHA256 and "
-                "ENVIRONMENT_TOKEN_KEY first"
-            )
+        if missing := missing_settings():
+            raise CommandError(f"set {', '.join(missing)} first")
         try:
             row = Tenant.objects.get(slug=tenant)
         except Tenant.DoesNotExist as error:

@@ -7,10 +7,12 @@ import json
 import shutil
 import subprocess
 from hashlib import sha256
+from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
 import httpx
 import pytest
+from botocore.stub import ANY, Stubber
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from sprites import FileNotFoundError_, NotFoundError, URLSettings
@@ -31,6 +33,7 @@ from apps.tenancy.environment import (
     EnvironmentProvisioningError,
     begin_environment,
     bind_store,
+    host_object_key,
     host_token,
     provision_environment,
     sprite_name,
@@ -54,6 +57,7 @@ class FakeSprite:
         self.labels: list[str] = []
         self.files: dict[str, tuple[str, int]] = {}
         self.binary_sha: str | None = None
+        self.install_url: str | None = None
         self.install_fails = False
         self.service: dict | None = None
         self.status = "stopped"
@@ -65,6 +69,7 @@ class FakeSprite:
     def run(self, *args, env, capture_output, timeout):
         assert args[:3] == ("bash", "-c", INSTALL_HOST) and capture_output
         assert env["HOST_PATH"] == HOST_PATH
+        self.install_url = env["HOST_URL"]
         if self.binary_sha == env["HOST_SHA256"]:
             return CompletedProcess(list(args), 0, b"unchanged\n", b"")
         if self.install_fails:
@@ -168,7 +173,9 @@ class FakeSprites:
 @pytest.fixture
 def env_configured(settings):
     settings.SPRITES_TOKEN = "sprites-test-token"
-    settings.ENVIRONMENT_HOST_URL = "https://releases.example/theorem-ide-host"
+    settings.ENVIRONMENT_HOST_BUCKET = "theorem-ide-host-releases-test"
+    settings.ENVIRONMENT_HOST_S3_ACCESS_KEY_ID = "release-test-key"
+    settings.ENVIRONMENT_HOST_S3_SECRET_ACCESS_KEY = "release-test-secret"
     settings.ENVIRONMENT_HOST_SHA256 = HOST_SHA
     settings.ENVIRONMENT_TOKEN_KEY = "environment-test-key"
     settings.ENVIRONMENT_READY_TIMEOUT_SECONDS = 5
@@ -246,6 +253,19 @@ def test_provision_builds_a_public_sprite_running_the_tenants_host(env_configure
     assert host.state == EnvironmentHost.State.SERVING
     assert host.url == sprite.url
     assert host.host_sha256 == HOST_SHA
+
+
+def test_the_sprite_downloads_its_pinned_build_through_a_short_lived_link(env_configured):
+    tenant = _tenant()
+    sprites = FakeSprites()
+    _provision(tenant, sprites)
+
+    link = sprites.sprites[sprite_name(tenant)].install_url
+    url = urlparse(link)
+    assert url.hostname.endswith("fly.storage.tigris.dev")
+    assert url.path.endswith(f"/{host_object_key(HOST_SHA)}")
+    assert parse_qs(url.query)["X-Amz-Expires"] == ["600"]
+    assert "release-test-secret" not in link
 
 
 def test_the_host_token_is_derived_never_stored(env_configured):
@@ -500,3 +520,73 @@ def test_the_install_script_replaces_only_with_the_pinned_binary(tmp_path):
     assert refused.returncode != 0
     assert dest.read_bytes() == release.read_bytes()
     assert [p.name for p in dest.parent.iterdir()] == ["theorem-ide-host"]
+
+
+ELF_X86_64 = b"\x7fELF\x02\x01\x01" + b"\x00" * 11 + (62).to_bytes(2, "little")
+
+
+@pytest.fixture
+def release_bucket(env_configured, monkeypatch):
+    from apps.tenancy.environment import release_bucket_client
+    from apps.tenancy.management.commands import publish_environment_host as command
+
+    client = release_bucket_client()
+    monkeypatch.setattr(command, "release_bucket_client", lambda: client)
+    with Stubber(client) as stub:
+        yield stub
+        stub.assert_no_pending_responses()
+
+
+def _build(tmp_path, header: bytes = ELF_X86_64):
+    binary = tmp_path / "theorem-ide-host"
+    binary.write_bytes(header + b"rest of the build")
+    return binary, sha256(binary.read_bytes()).hexdigest()
+
+
+def test_publish_uploads_the_build_under_its_digest(release_bucket, tmp_path, capsys):
+    binary, digest = _build(tmp_path)
+    where = {"Bucket": "theorem-ide-host-releases-test", "Key": host_object_key(digest)}
+    release_bucket.add_client_error(
+        "head_object", service_error_code="404", http_status_code=404, expected_params=where
+    )
+    release_bucket.add_response(
+        "put_object",
+        {},
+        {**where, "Body": ANY, "ContentType": "application/octet-stream"},
+    )
+    call_command("publish_environment_host", str(binary))
+    out = capsys.readouterr().out
+    assert f"published {host_object_key(digest)}" in out
+    assert f"ENVIRONMENT_HOST_SHA256={digest}" in out
+
+
+def test_publishing_a_published_build_uploads_nothing(release_bucket, tmp_path, capsys):
+    binary, digest = _build(tmp_path)
+    release_bucket.add_response(
+        "head_object",
+        {"ContentLength": binary.stat().st_size},
+        {"Bucket": "theorem-ide-host-releases-test", "Key": host_object_key(digest)},
+    )
+    call_command("publish_environment_host", str(binary))
+    assert "is already published" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "header",
+    [
+        b"\xcf\xfa\xed\xfe" + b"\x00" * 16,  # a macOS arm64 build
+        b"\x7fELF\x02\x01\x01" + b"\x00" * 11 + (183).to_bytes(2, "little"),  # linux arm64
+        b"#!/bin/sh\necho theorem-ide-host\n",
+    ],
+)
+def test_publish_refuses_anything_but_a_linux_x86_64_build(release_bucket, tmp_path, header):
+    binary, _ = _build(tmp_path, header)
+    with pytest.raises(CommandError, match="not a linux x86_64 executable"):
+        call_command("publish_environment_host", str(binary))
+
+
+def test_publish_refuses_without_the_bucket(settings, tmp_path):
+    settings.ENVIRONMENT_HOST_BUCKET = ""
+    binary, _ = _build(tmp_path)
+    with pytest.raises(CommandError, match="ENVIRONMENT_HOST_BUCKET"):
+        call_command("publish_environment_host", str(binary))

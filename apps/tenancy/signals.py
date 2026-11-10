@@ -8,7 +8,7 @@ from django.db import transaction
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 
-from apps.tenancy.environment import begin_environment, environment_configured
+from apps.tenancy.environment import begin_environment, environment_configured, missing_settings
 from apps.tenancy.models import Tenant
 from apps.tenancy.provisioning import begin_provisioning, provisioning_configured
 
@@ -42,9 +42,9 @@ def provision_environment_on_signup(
         return
     if not environment_configured():
         logger.warning(
-            "tenant %s has no coding environment: set SPRITES_TOKEN, ENVIRONMENT_HOST_URL, "
-            "ENVIRONMENT_HOST_SHA256 and ENVIRONMENT_TOKEN_KEY to provision one",
+            "tenant %s has no coding environment: set %s to provision one",
             instance.slug,
+            ", ".join(missing_settings()),
         )
         return
     begin_environment(instance)

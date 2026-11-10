@@ -191,13 +191,25 @@ STORE_PROVISION_TIMEOUT_SECONDS = env.int("STORE_PROVISION_TIMEOUT_SECONDS", def
 # tenant one Fly Sprite running theorem-ide-host and binds the tenant's store
 # to it. SPRITES_TOKEN (a Sprites org token) and ENVIRONMENT_TOKEN_KEY are the
 # secrets: the key derives each host's bearer token, which is never stored.
-# ENVIRONMENT_HOST_URL and ENVIRONMENT_HOST_SHA256 pin the linux x86_64 host
-# binary every sprite installs. Environments stay off until all four are set.
+# ENVIRONMENT_HOST_SHA256 pins the linux x86_64 host binary every sprite
+# installs. Builds live in a private Tigris bucket on Fly, stored under their
+# digest (manage.py publish_environment_host); each sprite downloads its build
+# through a short-lived presigned link, so the bucket keys never leave Django.
+# Environments stay off until every one of these but the endpoint and region
+# is set.
 SPRITES_TOKEN = env("SPRITES_TOKEN", default="")
 SPRITES_API_BASE = env("SPRITES_API_BASE", default="https://api.sprites.dev")
 ENVIRONMENT_SPRITE_PREFIX = env("ENVIRONMENT_SPRITE_PREFIX", default="theorem-env")
-ENVIRONMENT_HOST_URL = env("ENVIRONMENT_HOST_URL", default="")
 ENVIRONMENT_HOST_SHA256 = env("ENVIRONMENT_HOST_SHA256", default="")
+ENVIRONMENT_HOST_BUCKET = env("ENVIRONMENT_HOST_BUCKET", default="")
+ENVIRONMENT_HOST_S3_ENDPOINT_URL = env(
+    "ENVIRONMENT_HOST_S3_ENDPOINT_URL", default="https://fly.storage.tigris.dev"
+)
+ENVIRONMENT_HOST_S3_REGION = env("ENVIRONMENT_HOST_S3_REGION", default="auto")
+ENVIRONMENT_HOST_S3_ACCESS_KEY_ID = env("ENVIRONMENT_HOST_S3_ACCESS_KEY_ID", default="")
+ENVIRONMENT_HOST_S3_SECRET_ACCESS_KEY = env(
+    "ENVIRONMENT_HOST_S3_SECRET_ACCESS_KEY", default=""
+)
 ENVIRONMENT_TOKEN_KEY = env("ENVIRONMENT_TOKEN_KEY", default="")
 ENVIRONMENT_READY_TIMEOUT_SECONDS = env.int("ENVIRONMENT_READY_TIMEOUT_SECONDS", default=180)
 

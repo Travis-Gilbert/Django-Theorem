@@ -20,6 +20,10 @@ every tenant's token on the next provisioning run.
 A sprite's URL is public: the host's own bearer token is its authentication.
 Sprites' ``sprite`` URL auth would demand the org token in the same
 ``Authorization`` header, which the store must never hold.
+
+Host builds sit in a private bucket under their digest, so pinning
+``ENVIRONMENT_HOST_SHA256`` names both the object and the check it must pass.
+A sprite gets a presigned link to that one object, valid for ten minutes.
 """
 
 from __future__ import annotations
@@ -30,7 +34,9 @@ import hmac
 import json
 from time import monotonic, sleep
 
+import boto3
 import httpx
+from botocore.config import Config
 from django.conf import settings
 from sprites import FileNotFoundError_, NotFoundError, SpritesClient, URLSettings
 from sprites.exceptions import APIError
@@ -50,6 +56,20 @@ STORE_MACHINE_NAME = "store"
 STORE_HOSTS_FILE = "/run/secrets/environment-hosts.json"
 STORE_TOKEN_FILE = "/run/secrets/environment-token"
 STORE_TOKEN_SECRET = "THEOREM_ENVIRONMENT_TOKEN_B64"
+
+HOST_OBJECT_PREFIX = "theorem-ide-host/linux-x86_64"
+HOST_DOWNLOAD_SECONDS = 600
+RELEASE_BUCKET_SETTINGS = (
+    "ENVIRONMENT_HOST_BUCKET",
+    "ENVIRONMENT_HOST_S3_ACCESS_KEY_ID",
+    "ENVIRONMENT_HOST_S3_SECRET_ACCESS_KEY",
+)
+REQUIRED_SETTINGS = (
+    "SPRITES_TOKEN",
+    "ENVIRONMENT_TOKEN_KEY",
+    "ENVIRONMENT_HOST_SHA256",
+    *RELEASE_BUCKET_SETTINGS,
+)
 
 # Replace the binary only when its digest differs from the pinned one, and
 # only with a download that matches it. Prints whether anything changed.
@@ -75,12 +95,40 @@ class EnvironmentProvisioningError(RuntimeError):
     """The environment could not be built; the host row records why."""
 
 
+def missing_settings(names: tuple[str, ...] = REQUIRED_SETTINGS) -> list[str]:
+    return [name for name in names if not getattr(settings, name)]
+
+
 def environment_configured() -> bool:
-    return bool(
-        settings.SPRITES_TOKEN
-        and settings.ENVIRONMENT_HOST_URL
-        and settings.ENVIRONMENT_HOST_SHA256
-        and settings.ENVIRONMENT_TOKEN_KEY
+    return not missing_settings()
+
+
+def host_object_key(sha256: str) -> str:
+    return f"{HOST_OBJECT_PREFIX}/{sha256}"
+
+
+def release_bucket_client():
+    return boto3.client(
+        "s3",
+        endpoint_url=settings.ENVIRONMENT_HOST_S3_ENDPOINT_URL,
+        region_name=settings.ENVIRONMENT_HOST_S3_REGION,
+        aws_access_key_id=settings.ENVIRONMENT_HOST_S3_ACCESS_KEY_ID,
+        aws_secret_access_key=settings.ENVIRONMENT_HOST_S3_SECRET_ACCESS_KEY,
+        config=Config(signature_version="s3v4"),
+    )
+
+
+def host_download_url(client=None) -> str:
+    """A link to the pinned build, valid for ``HOST_DOWNLOAD_SECONDS``."""
+    client = client or release_bucket_client()
+    return client.generate_presigned_url(
+        "get_object",
+        Params={
+            "Bucket": settings.ENVIRONMENT_HOST_BUCKET,
+            "Key": host_object_key(settings.ENVIRONMENT_HOST_SHA256),
+        },
+        ExpiresIn=HOST_DOWNLOAD_SECONDS,
+        HttpMethod="GET",
     )
 
 
@@ -256,7 +304,7 @@ def _install_host(sprite) -> bool:
         INSTALL_HOST,
         env={
             "HOST_PATH": HOST_PATH,
-            "HOST_URL": settings.ENVIRONMENT_HOST_URL,
+            "HOST_URL": host_download_url(),
             "HOST_SHA256": settings.ENVIRONMENT_HOST_SHA256,
         },
         capture_output=True,
