@@ -9,11 +9,14 @@ placement; every step finds what an earlier attempt already made.
 
 from __future__ import annotations
 
+from uuid import uuid4
+
 from django.core.management.base import BaseCommand, CommandError
 
 from apps.tenancy.fly import FlyApiError
 from apps.tenancy.models import StorePlacement, Tenant
 from apps.tenancy.provisioning import (
+    BuildClaimed,
     ProvisioningError,
     begin_provisioning,
     client_from_settings,
@@ -38,9 +41,13 @@ class Command(BaseCommand):
         except Tenant.DoesNotExist as error:
             raise CommandError(f"no tenant {tenant}") from error
         placement = begin_provisioning(row)
+        if placement.state == StorePlacement.State.FAILED:
+            placement.retry_provisioning()
         client = client_from_settings()
         try:
-            placement = provision(placement, client)
+            placement = provision(placement, client, claimant=f"command:{uuid4().hex}")
+        except BuildClaimed as error:
+            raise CommandError(f"{error}; wait for it, or for its claim to lapse") from error
         except (FlyApiError, ProvisioningError) as error:
             placement.refresh_from_db()
             if placement.state == StorePlacement.State.PROVISIONING:

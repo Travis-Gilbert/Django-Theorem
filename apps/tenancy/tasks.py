@@ -8,11 +8,13 @@ from datetime import timedelta
 
 from celery import shared_task
 from django.conf import settings
+from django.db.models import Q
 from django.utils import timezone
 
 from apps.tenancy.fly import FlyApiError
 from apps.tenancy.models import StorePlacement, Tenant
 from apps.tenancy.provisioning import (
+    BuildClaimed,
     ProvisioningError,
     begin_provisioning,
     client_from_settings,
@@ -29,10 +31,15 @@ MAX_RETRIES = 5
 def provision_tenant_store(self, tenant_id: str) -> dict:
     tenant = Tenant.objects.get(pk=tenant_id)
     placement = begin_provisioning(tenant)
-    _touch(placement)
     client = client_from_settings()
     try:
-        placement = provision(placement, client)
+        # A retry keeps its task id, so it keeps the build it claimed.
+        placement = provision(placement, client, claimant=f"task:{self.request.id}")
+    except BuildClaimed:
+        # The sweep can queue a second job while the first waits for a
+        # worker; whichever starts second stands down here.
+        logger.info("store build for %s is already running", tenant.slug)
+        return {"tenant": tenant.slug, "store": placement.store.slug, "state": "claimed"}
     except FlyApiError as exc:
         # Fly answers 5xx and rate limits during incidents; try again with
         # backoff, and record the failure only when the retries run out.
@@ -53,16 +60,19 @@ def provision_tenant_store(self, tenant_id: str) -> dict:
 def sweep_stranded_store_provisioning() -> int:
     """Queue the build again for placements whose job was lost.
 
-    Each attempt touches its placement as it starts, so a placement no attempt
-    has touched for ``STORE_PROVISION_STRANDED_AFTER_SECONDS`` has no live job.
+    Each attempt claims its placement as it starts, so a placement with no live
+    claim that nothing has touched for ``STORE_PROVISION_STRANDED_AFTER_SECONDS``
+    has no live job. A job still waiting for a worker may be queued twice; the
+    build claim lets only one of them build.
     """
     if not provisioning_configured():
         return 0
-    cutoff = timezone.now() - timedelta(seconds=settings.STORE_PROVISION_STRANDED_AFTER_SECONDS)
+    now = timezone.now()
+    cutoff = now - timedelta(seconds=settings.STORE_PROVISION_STRANDED_AFTER_SECONDS)
     stranded = list(
-        StorePlacement.objects.filter(
-            state=StorePlacement.State.PROVISIONING, updated_at__lt=cutoff
-        ).values_list("pk", "tenant_id")
+        StorePlacement.objects.filter(state=StorePlacement.State.PROVISIONING, updated_at__lt=cutoff)
+        .filter(Q(build_claimed_until__isnull=True) | Q(build_claimed_until__lt=now))
+        .values_list("pk", "tenant_id")
     )
     for placement_id, tenant_id in stranded:
         # Queue first: if the broker refuses, the placement stays stale and the
@@ -73,13 +83,6 @@ def sweep_stranded_store_provisioning() -> int:
     if stranded:
         logger.warning("queued %d stranded store builds", len(stranded))
     return len(stranded)
-
-
-def _touch(placement: StorePlacement) -> None:
-    # ``auto_now`` does not apply to ``update``; set the time explicitly.
-    StorePlacement.objects.filter(
-        pk=placement.pk, state=StorePlacement.State.PROVISIONING
-    ).update(updated_at=timezone.now())
 
 
 def _fail(placement: StorePlacement, error: str) -> None:

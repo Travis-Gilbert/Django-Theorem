@@ -13,6 +13,7 @@ a public key. The only credential here is ``FLY_API_TOKEN``, held by Django.
 
 from __future__ import annotations
 
+from datetime import timedelta
 from time import monotonic, sleep
 
 from django.conf import settings
@@ -29,6 +30,10 @@ READY_CHECK = "store_ready"
 
 class ProvisioningError(RuntimeError):
     """The store could not be built; the placement records why."""
+
+
+class BuildClaimed(RuntimeError):
+    """Another attempt is building this placement's store; this one stood down."""
 
 
 def provisioning_configured() -> bool:
@@ -116,21 +121,29 @@ def provision(
     placement: StorePlacement,
     client: FlyMachinesClient,
     *,
+    claimant: str,
     poll_interval_seconds: float = 5.0,
 ) -> StorePlacement:
     """Build the placement's store and serve the tenant from it.
 
-    Safe to run again after a crash or a failure: each Fly resource is found by
-    name before it is created. Raises ``FlyApiError`` for a failure worth
-    retrying and ``ProvisioningError`` when the store never became ready.
+    ``claimant`` names this attempt; a retry of the same attempt passes the same
+    name. Safe to run again after a crash or a failure: each Fly resource is
+    found by name before it is created. Raises ``BuildClaimed`` when another
+    attempt holds the build, ``FlyApiError`` for a failure worth retrying, and
+    ``ProvisioningError`` when the store never became ready. A ``serving`` or
+    ``failed`` placement is returned as it is: an operator retries a failed
+    build (``manage.py provision_tenant_store``).
     """
     placement = StorePlacement.objects.select_related("tenant", "store").get(pk=placement.pk)
-    if placement.state == StorePlacement.State.SERVING:
+    if placement.state in (StorePlacement.State.SERVING, StorePlacement.State.FAILED):
         return placement
-    if placement.state == StorePlacement.State.FAILED:
-        placement.retry_provisioning()
     if placement.state != StorePlacement.State.PROVISIONING:
         raise ProvisioningError(f"{placement} is {placement.state}, not provisioning")
+    # Longer than one attempt plus its retry backoff, so a live attempt keeps
+    # the build; a dead one's claim lapses and the sweep queues a new attempt.
+    hold = timedelta(seconds=settings.STORE_PROVISION_STRANDED_AFTER_SECONDS)
+    if not placement.claim_build(claimant, hold):
+        raise BuildClaimed(f"another attempt is building {placement}")
 
     tenant, store = placement.tenant, placement.store
     app = store.fly_app or store.slug

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import uuid
+from datetime import timedelta
 
 from django.db import models, transaction
+from django.utils import timezone
 
 
 class Tenant(models.Model):
@@ -92,6 +94,10 @@ class StorePlacement(models.Model):
       until an operator retries (``manage.py provision_tenant_store``).
     - ``serving`` once the store answers its readiness check.
 
+    One attempt builds a placement at a time: it claims the build
+    (``claim_build``) before touching Fly, and the claim lapses on its own if
+    the attempt dies.
+
     A move between stores is four states the Rust front reads and routes by:
 
     - ``serving``: ``store`` answers everything; no move is in flight.
@@ -133,6 +139,8 @@ class StorePlacement(models.Model):
     )
     epoch = models.PositiveBigIntegerField(default=1)
     last_error = models.TextField(blank=True, default="")
+    build_claimant = models.CharField(max_length=64, blank=True, default="")
+    build_claimed_until = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -160,6 +168,23 @@ class StorePlacement(models.Model):
             return f"{self.tenant.slug} on {self.store.slug} ({self.state} to {self.target_store.slug})"
         return f"{self.tenant.slug} on {self.store.slug}"
 
+    def claim_build(self, claimant: str, hold: timedelta) -> bool:
+        """Take the build for ``hold``, unless another attempt holds it.
+
+        The holder may claim again, which is how a retried task keeps its build.
+        """
+        now = timezone.now()
+        taken = (
+            StorePlacement.objects.filter(pk=self.pk, state=self.State.PROVISIONING)
+            .filter(
+                models.Q(build_claimed_until__isnull=True)
+                | models.Q(build_claimed_until__lt=now)
+                | models.Q(build_claimant=claimant)
+            )
+            .update(build_claimant=claimant, build_claimed_until=now + hold, updated_at=now)
+        )
+        return taken == 1
+
     def mark_provisioned(self) -> None:
         """Serve the tenant from its newly built store."""
         with transaction.atomic():
@@ -168,7 +193,8 @@ class StorePlacement(models.Model):
                 raise PlacementTransitionError(f"{locked} is not provisioning")
             locked.state = self.State.SERVING
             locked.last_error = ""
-            locked.save(update_fields=["state", "last_error", "updated_at"])
+            locked._release_build()
+            locked.save(update_fields=[*self._BUILD_FIELDS, "state", "last_error", "updated_at"])
         self.refresh_from_db()
 
     def mark_failed(self, error: str) -> None:
@@ -179,7 +205,8 @@ class StorePlacement(models.Model):
                 raise PlacementTransitionError(f"{locked} is not provisioning")
             locked.state = self.State.FAILED
             locked.last_error = error
-            locked.save(update_fields=["state", "last_error", "updated_at"])
+            locked._release_build()
+            locked.save(update_fields=[*self._BUILD_FIELDS, "state", "last_error", "updated_at"])
         self.refresh_from_db()
 
     def retry_provisioning(self) -> None:
@@ -226,6 +253,12 @@ class StorePlacement(models.Model):
             locked.target_store = None
             locked.save(update_fields=["state", "target_store", "updated_at"])
         self.refresh_from_db()
+
+    _BUILD_FIELDS = ("build_claimant", "build_claimed_until")
+
+    def _release_build(self) -> None:
+        self.build_claimant = ""
+        self.build_claimed_until = None
 
     def _step(self, expected: str, to: str) -> None:
         with transaction.atomic():
