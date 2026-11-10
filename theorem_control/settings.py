@@ -187,6 +187,20 @@ STORE_MEMORY_MB = env.int("STORE_MEMORY_MB", default=4096)
 STORE_VOLUME_GB = env.int("STORE_VOLUME_GB", default=10)
 STORE_PROVISION_TIMEOUT_SECONDS = env.int("STORE_PROVISION_TIMEOUT_SECONDS", default=600)
 
+# Coding environments (apps.tenancy.environment). Signup also gives each
+# tenant one Fly Sprite running theorem-ide-host and binds the tenant's store
+# to it. SPRITES_TOKEN (a Sprites org token) and ENVIRONMENT_TOKEN_KEY are the
+# secrets: the key derives each host's bearer token, which is never stored.
+# ENVIRONMENT_HOST_URL and ENVIRONMENT_HOST_SHA256 pin the linux x86_64 host
+# binary every sprite installs. Environments stay off until all four are set.
+SPRITES_TOKEN = env("SPRITES_TOKEN", default="")
+SPRITES_API_BASE = env("SPRITES_API_BASE", default="https://api.sprites.dev")
+ENVIRONMENT_SPRITE_PREFIX = env("ENVIRONMENT_SPRITE_PREFIX", default="theorem-env")
+ENVIRONMENT_HOST_URL = env("ENVIRONMENT_HOST_URL", default="")
+ENVIRONMENT_HOST_SHA256 = env("ENVIRONMENT_HOST_SHA256", default="")
+ENVIRONMENT_TOKEN_KEY = env("ENVIRONMENT_TOKEN_KEY", default="")
+ENVIRONMENT_READY_TIMEOUT_SECONDS = env.int("ENVIRONMENT_READY_TIMEOUT_SECONDS", default=180)
+
 # Empty VALKEY_URL/REDIS_URL → tenant_cache uses in-memory dict (tests / no Redis).
 VALKEY_URL = env("VALKEY_URL", default=env("REDIS_URL", default=""))
 REDIS_URL = VALKEY_URL

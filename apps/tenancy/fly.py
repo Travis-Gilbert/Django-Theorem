@@ -89,16 +89,59 @@ class FlyMachinesClient:
             json={"name": name, "region": region, "size_gb": size_gb, "encrypted": True},
         )
 
-    def ensure_machine(self, app: str, *, name: str, region: str, config: dict[str, Any]) -> dict[str, Any]:
+    def find_machine(self, app: str, name: str) -> dict[str, Any] | None:
         machines = self._request("GET", f"{self._app(app)}/machines") or []
         for machine in machines:
             if machine.get("name") == name and machine.get("state") not in ("destroyed", "destroying"):
                 return machine
+        return None
+
+    def ensure_machine(
+        self,
+        app: str,
+        *,
+        name: str,
+        region: str,
+        config: dict[str, Any],
+        min_secrets_version: int | None = None,
+    ) -> dict[str, Any]:
+        existing = self.find_machine(app, name)
+        if existing is not None:
+            return existing
+        body: dict[str, Any] = {"name": name, "region": region, "config": config}
+        if min_secrets_version is not None:
+            body["min_secrets_version"] = min_secrets_version
+        return self._request("POST", f"{self._app(app)}/machines", json=body)
+
+    def update_machine(
+        self,
+        app: str,
+        machine_id: str,
+        *,
+        config: dict[str, Any],
+        min_secrets_version: int | None = None,
+    ) -> dict[str, Any]:
+        """Replace a machine's config; Fly restarts it to apply the change."""
+        body: dict[str, Any] = {"config": config}
+        if min_secrets_version is not None:
+            body["min_secrets_version"] = min_secrets_version
         return self._request(
-            "POST",
-            f"{self._app(app)}/machines",
-            json={"name": name, "region": region, "config": config},
+            "POST", f"{self._app(app)}/machines/{quote(machine_id, safe='')}", json=body
         )
+
+    def set_secret(self, app: str, name: str, value: str) -> int:
+        """Set an app secret and return the secrets version that carries it.
+
+        Pass the version as ``min_secrets_version`` so the machine that reads
+        the secret starts with this value rather than an older one.
+        """
+        result = self._request(
+            "POST", f"{self._app(app)}/secrets/{quote(name, safe='')}", json={"value": value}
+        )
+        version = result.get("version", result.get("Version"))
+        if not isinstance(version, int):
+            raise FlyApiError(f"Fly set secret {name} on {app} returned no version")
+        return version
 
     def wait_started(self, app: str, machine_id: str, *, timeout_seconds: int = 60) -> None:
         self._request(

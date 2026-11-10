@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Project, Store, StorePlacement, Tenant
+from .models import EnvironmentHost, Project, Store, StorePlacement, Tenant
 
 
 @admin.register(Tenant)
@@ -40,3 +40,15 @@ class StorePlacementAdmin(admin.ModelAdmin):
         if obj is None:
             return self.readonly_fields
         return ("tenant", "store", *self.readonly_fields)
+
+
+@admin.register(EnvironmentHost)
+class EnvironmentHostAdmin(admin.ModelAdmin):
+    """Hosts are read here; provisioning goes through
+    ``provision_tenant_environment``, which also binds the tenant's store."""
+
+    list_display = ("tenant", "sprite", "state", "url", "host_sha256", "updated_at")
+    list_filter = ("state",)
+    search_fields = ("tenant__slug", "sprite")
+    raw_id_fields = ("tenant",)
+    readonly_fields = ("tenant", "sprite", "url", "host_sha256", "state", "last_error")

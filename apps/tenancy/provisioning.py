@@ -6,9 +6,12 @@ and machine in the Theorem org, waits for the store's readiness check, and
 moves the placement to ``serving``. The front routes to the store over Fly's
 private network (``<app>.internal``), so the front must run in the same org.
 
-The store holds no secret. It admits only its own tenant and checks the
-front's short-lived signed tokens against ``STORE_SESSION_VERIFYING_KEYS_HEX``,
-a public key. The only credential here is ``FLY_API_TOKEN``, held by Django.
+The store admits only its own tenant and checks the front's short-lived
+signed tokens against ``STORE_SESSION_VERIFYING_KEYS_HEX``, a public key. Its
+one secret is the bearer token for the tenant's coding environment
+(``apps.tenancy.environment``), which reaches it as a Fly app secret rather
+than in the machine config. When the environment is already serving, the store
+is created bound to it; otherwise ``bind_store`` binds it later.
 """
 
 from __future__ import annotations
@@ -18,12 +21,19 @@ from time import monotonic, sleep
 from django.conf import settings
 from django.db import transaction
 
+from apps.tenancy.environment import (
+    STORE_MACHINE_NAME,
+    bind_store,
+    set_store_token,
+    store_binding,
+    with_binding,
+)
 from apps.tenancy.fly import FlyApiError, FlyMachinesClient
 from apps.tenancy.models import Store, StorePlacement, Tenant
 
 STORE_PORT = 8380
 VOLUME_NAME = "rustyred_data"
-MACHINE_NAME = "store"
+MACHINE_NAME = STORE_MACHINE_NAME
 READY_CHECK = "store_ready"
 
 
@@ -125,6 +135,7 @@ def provision(
     """
     placement = StorePlacement.objects.select_related("tenant", "store").get(pk=placement.pk)
     if placement.state == StorePlacement.State.SERVING:
+        bind_store(placement.tenant, client)
         return placement
     if placement.state == StorePlacement.State.FAILED:
         placement.retry_provisioning()
@@ -136,8 +147,17 @@ def provision(
     region = settings.STORE_REGION
     client.ensure_app(app)
     client.ensure_volume(app, name=VOLUME_NAME, region=region, size_gb=settings.STORE_VOLUME_GB)
+    config, secrets_version = machine_config(tenant, app), None
+    binding = store_binding(tenant)
+    if binding is not None:
+        config = with_binding(config, binding)
+        secrets_version = set_store_token(client, app, tenant)
     machine = client.ensure_machine(
-        app, name=MACHINE_NAME, region=region, config=machine_config(tenant, app)
+        app,
+        name=MACHINE_NAME,
+        region=region,
+        config=config,
+        min_secrets_version=secrets_version,
     )
     machine_id = machine.get("id")
     if not machine_id:
@@ -157,6 +177,8 @@ def provision(
         sleep(poll_interval_seconds)
 
     placement.mark_provisioned()
+    # The environment may have started serving while the store was building.
+    bind_store(tenant, client)
     return placement
 
 
