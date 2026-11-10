@@ -101,9 +101,10 @@ class StorePlacement(models.Model):
       the front refuses with a retryable error.
     - back to ``serving`` on ``target_store``, with ``epoch`` bumped.
 
-    No front serves a placement older than two minutes, even while it cannot
-    reach this database, so the operator waits two minutes after each step
-    before taking the next. Use the transition methods
+    No front starts a store call on a placement older than two minutes, even
+    while it cannot reach this database, and no store call runs longer than one
+    minute, so the operator waits three minutes after each step before taking
+    the next. Use the transition methods
     (or ``manage.py move_tenant_store``) rather than editing the row.
     """
 
