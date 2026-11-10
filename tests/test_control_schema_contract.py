@@ -39,6 +39,15 @@ CONTROL_SCHEMA_CONTRACT: list[tuple[str, str]] = [
     ("control_trainingrun", "taskset_ref"),
     ("control_trainingrun", "status"),
     ("control_trainingrun", "config_digest"),
+    ("control_store", "id"),
+    ("control_store", "slug"),
+    ("control_store", "http_url"),
+    ("control_store", "grpc_url"),
+    ("control_storeplacement", "tenant_id"),
+    ("control_storeplacement", "store_id"),
+    ("control_storeplacement", "state"),
+    ("control_storeplacement", "target_store_id"),
+    ("control_storeplacement", "epoch"),
 ]
 
 
@@ -65,7 +74,7 @@ def _column_names(model: type) -> set[str]:
 
 
 def test_control_schema_contract_column_count():
-    assert len(CONTROL_SCHEMA_CONTRACT) == 23
+    assert len(CONTROL_SCHEMA_CONTRACT) == 32
 
 
 def test_control_schema_contract_models_declare_required_columns():

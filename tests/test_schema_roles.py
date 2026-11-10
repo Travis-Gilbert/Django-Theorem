@@ -119,6 +119,14 @@ def test_d3_columns_present():
             "status",
             "config_digest",
         },
+        "control_store": {"id", "slug", "http_url", "grpc_url"},
+        "control_storeplacement": {
+            "tenant_id",
+            "store_id",
+            "state",
+            "target_store_id",
+            "epoch",
+        },
     }
     with connection.cursor() as cursor:
         for table, cols in expected.items():
@@ -215,6 +223,11 @@ def test_theorem_spine_can_select_control_tenant():
         (
             "control_trainingrun",
             "id, tenant_id, taskset_ref, status, config_digest",
+        ),
+        ("control_store", "id, slug, http_url, grpc_url"),
+        (
+            "control_storeplacement",
+            "tenant_id, store_id, state, target_store_id, epoch",
         ),
     ],
 )

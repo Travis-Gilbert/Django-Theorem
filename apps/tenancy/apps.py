@@ -6,3 +6,6 @@ class TenancyConfig(AppConfig):
     name = "apps.tenancy"
     label = "tenancy"
     verbose_name = "Tenancy"
+
+    def ready(self) -> None:
+        from apps.tenancy import signals  # noqa: F401

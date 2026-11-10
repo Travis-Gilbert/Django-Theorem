@@ -76,6 +76,14 @@ GRANT SELECT (
   id, tenant_id, taskset_ref, status, config_digest
 ) ON control.control_trainingrun TO theorem_spine;
 
+GRANT SELECT (
+  id, slug, http_url, grpc_url
+) ON control.control_store TO theorem_spine;
+
+GRANT SELECT (
+  tenant_id, store_id, state, target_store_id, epoch
+) ON control.control_storeplacement TO theorem_spine;
+
 -- Explicitly no write on control for spine
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON ALL TABLES IN SCHEMA control FROM theorem_spine;
 
