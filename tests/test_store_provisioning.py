@@ -145,7 +145,9 @@ def test_provision_builds_the_store_in_the_theorem_org_and_serves_the_tenant(con
     machine = fly.machines[app][0]
     env = machine["config"]["env"]
     assert machine["config"]["image"] == configured.STORE_IMAGE
-    assert machine["config"]["mounts"] == [{"volume": "rustyred_data", "path": "/data"}]
+    # Fly mounts by volume id; the name is only how a retry finds the volume.
+    assert machine["config"]["mounts"] == [{"volume": fly.volumes[app][0]["id"], "path": "/data"}]
+    assert fly.volumes[app][0]["id"] != "rustyred_data"
     assert env["RUSTY_RED_TENANT_ALLOWLIST"] == tenant.slug
     assert env["RUSTY_RED_TENANT_ADMISSION"] == "allowlist"
     assert env["RUSTY_RED_REQUIRE_AUTH"] == "true"
@@ -250,6 +252,76 @@ def test_a_provisioning_placement_cannot_be_moved_or_aborted(configured):
         placement.abort_move()
     with pytest.raises(PlacementTransitionError):
         placement.retry_provisioning()
+
+
+def test_a_broker_outage_does_not_fail_signup(configured, django_capture_on_commit_callbacks, monkeypatch):
+    def refuse(tenant_id):
+        raise ConnectionError("broker down")
+
+    monkeypatch.setattr("apps.tenancy.tasks.provision_tenant_store.delay", refuse)
+    with django_capture_on_commit_callbacks(execute=True):
+        tenant = _tenant()
+    assert StorePlacement.objects.get(tenant=tenant).state == StorePlacement.State.PROVISIONING
+
+
+def test_the_sweep_queues_only_stranded_builds(configured, monkeypatch):
+    from datetime import timedelta
+
+    from django.utils import timezone
+
+    from apps.tenancy import tasks
+
+    queued: list[str] = []
+    monkeypatch.setattr(tasks.provision_tenant_store, "delay", lambda tenant_id: queued.append(tenant_id))
+    stale = timezone.now() - timedelta(seconds=configured.STORE_PROVISION_STRANDED_AFTER_SECONDS + 60)
+    stranded, fresh, failed = _tenant(), _tenant(), _tenant()
+    StorePlacement.objects.filter(tenant__in=[stranded, failed]).update(updated_at=stale)
+    StorePlacement.objects.get(tenant=failed).mark_failed("capacity")
+    StorePlacement.objects.filter(tenant=failed).update(updated_at=stale)
+
+    assert tasks.sweep_stranded_store_provisioning() == 1
+    assert queued == [str(stranded.pk)]
+    # The serving personal tenant, the fresh build and the failed one are left alone.
+    assert str(fresh.pk) not in queued and str(failed.pk) not in queued
+    # Queuing touches the placement, so the next sweep does not queue it twice.
+    assert tasks.sweep_stranded_store_provisioning() == 0
+    assert queued == [str(stranded.pk)]
+
+
+def test_the_sweep_does_nothing_without_configuration(settings, monkeypatch):
+    from apps.tenancy import tasks
+
+    settings.FLY_API_TOKEN = ""
+    monkeypatch.setattr(tasks.provision_tenant_store, "delay", lambda tenant_id: pytest.fail("queued"))
+    assert tasks.sweep_stranded_store_provisioning() == 0
+
+
+def test_an_attempt_touches_its_placement(configured, monkeypatch):
+    from datetime import timedelta
+
+    from django.utils import timezone
+
+    from apps.tenancy import tasks
+
+    tenant = _tenant()
+    stale = timezone.now() - timedelta(days=1)
+    StorePlacement.objects.filter(tenant=tenant).update(updated_at=stale)
+    fly = FakeFly()
+    monkeypatch.setattr(tasks, "client_from_settings", fly.client)
+    tasks.provision_tenant_store.apply(args=[str(tenant.pk)]).get()
+    assert StorePlacement.objects.get(tenant=tenant).updated_at > stale
+
+
+def test_the_admin_cannot_delete_a_placement(rf, admin_user):
+    from django.contrib.admin.sites import site
+
+    model_admin = site._registry[StorePlacement]
+    request = rf.get("/")
+    request.user = admin_user
+    placement = StorePlacement.objects.get(tenant__slug="Travis-Gilbert")
+    assert model_admin.has_delete_permission(request, placement) is False
+    # The positive control: the admin still lets the same user view it.
+    assert model_admin.has_view_permission(request, placement) is True
 
 
 def test_a_provisioning_placement_has_no_target(configured):

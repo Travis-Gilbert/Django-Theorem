@@ -65,13 +65,14 @@ def begin_provisioning(tenant: Tenant) -> StorePlacement:
         )
 
 
-def machine_config(tenant: Tenant, app: str) -> dict:
+def machine_config(tenant: Tenant, app: str, volume_id: str) -> dict:
     memory_mb = settings.STORE_MEMORY_MB
     memory_bytes = memory_mb * 1024 * 1024
     return {
         "image": settings.STORE_IMAGE,
         "guest": {"cpu_kind": "shared", "cpus": settings.STORE_CPUS, "memory_mb": memory_mb},
-        "mounts": [{"volume": VOLUME_NAME, "path": "/data"}],
+        # Fly mounts a volume by its id, not its name.
+        "mounts": [{"volume": volume_id, "path": "/data"}],
         "restart": {"policy": "always"},
         "metadata": {"theorem_tenant": tenant.slug, "theorem_role": "store"},
         "env": {
@@ -135,9 +136,14 @@ def provision(
     app = store.fly_app or store.slug
     region = settings.STORE_REGION
     client.ensure_app(app)
-    client.ensure_volume(app, name=VOLUME_NAME, region=region, size_gb=settings.STORE_VOLUME_GB)
+    volume = client.ensure_volume(
+        app, name=VOLUME_NAME, region=region, size_gb=settings.STORE_VOLUME_GB
+    )
+    volume_id = volume.get("id")
+    if not volume_id:
+        raise FlyApiError(f"Fly returned no volume id for {app}")
     machine = client.ensure_machine(
-        app, name=MACHINE_NAME, region=region, config=machine_config(tenant, app)
+        app, name=MACHINE_NAME, region=region, config=machine_config(tenant, app, volume_id)
     )
     machine_id = machine.get("id")
     if not machine_id:

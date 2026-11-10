@@ -30,4 +30,6 @@ def provision_store_on_signup(sender, instance: Tenant, created: bool, raw: bool
     from apps.tenancy.tasks import provision_tenant_store
 
     tenant_id = str(instance.pk)
-    transaction.on_commit(lambda: provision_tenant_store.delay(tenant_id))
+    # robust: a broker outage must not fail signup. The placement row already
+    # records the pending build, and the stranded-provisioning sweep queues it.
+    transaction.on_commit(lambda: provision_tenant_store.delay(tenant_id), robust=True)

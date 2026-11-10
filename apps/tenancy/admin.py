@@ -40,3 +40,8 @@ class StorePlacementAdmin(admin.ModelAdmin):
         if obj is None:
             return self.readonly_fields
         return ("tenant", "store", *self.readonly_fields)
+
+    def has_delete_permission(self, request, obj=None):
+        # Deleting a placement and making a new one would skip the checked
+        # move steps and reset the epoch; deleting alone strands the tenant.
+        return False

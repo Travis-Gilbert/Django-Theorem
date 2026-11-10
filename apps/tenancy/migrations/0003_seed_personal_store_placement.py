@@ -32,7 +32,11 @@ def unplace_personal_tenant(apps, schema_editor):
     StorePlacement.objects.filter(
         tenant__slug=PERSONAL_TENANT, store__slug=PERSONAL_STORE
     ).delete()
-    Store.objects.filter(slug=PERSONAL_STORE, placements__isnull=True).delete()
+    Store.objects.filter(
+        slug=PERSONAL_STORE,
+        placements__isnull=True,
+        incoming_placements__isnull=True,
+    ).delete()
 
 
 class Migration(migrations.Migration):
