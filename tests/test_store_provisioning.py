@@ -32,6 +32,9 @@ class FakeFly:
         self.apps: dict[str, dict] = {}
         self.volumes: dict[str, list[dict]] = {}
         self.machines: dict[str, list[dict]] = {}
+        self.secrets: dict[str, dict[str, str]] = {}
+        self.secrets_version = 0
+        self.updates: list[dict] = []
         self.calls: list[tuple[str, str]] = []
         self.ready_after = ready_after
         self.polls = 0
@@ -55,6 +58,10 @@ class FakeFly:
                 return httpx.Response(404, json={"error": "not found"})
             return httpx.Response(200, json=self.apps[app])
         kind = parts[2]
+        if kind == "secrets" and method == "POST":
+            self.secrets.setdefault(app, {})[parts[3]] = body["value"]
+            self.secrets_version += 1
+            return httpx.Response(200, json={"name": parts[3], "version": self.secrets_version})
         if kind == "volumes":
             if method == "GET":
                 return httpx.Response(200, json=self.volumes.get(app, []))
@@ -71,6 +78,11 @@ class FakeFly:
             self.machines.setdefault(app, []).append(machine)
             return httpx.Response(200, json=machine)
         machine = self.machines[app][0]
+        if len(parts) == 4 and method == "POST":
+            machine["config"] = body["config"]
+            machine["min_secrets_version"] = body.get("min_secrets_version")
+            self.updates.append(body)
+            return httpx.Response(200, json=machine)
         if len(parts) == 5 and parts[4] == "wait":
             assert request.url.params["state"] == "started"
             machine["state"] = "started"
