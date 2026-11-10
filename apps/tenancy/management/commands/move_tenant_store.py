@@ -6,7 +6,7 @@
     (copy the final delta)
     manage.py move_tenant_store Travis-Gilbert complete
 
-The front caches placements for 30 seconds: wait that long after each step.
+No front serves a placement older than two minutes: wait that long after each step.
 ``abort`` returns a moving tenant to its source store.
 """
 
